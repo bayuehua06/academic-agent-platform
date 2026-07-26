@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.agents.nodes.apa_formatter import format_apa_references
 from app.agents.nodes.requirement_analyzer import analyze_requirements
 from app.agents.nodes.researcher import search_literature
 from app.agents.nodes.writer import write_apa_draft
-from app.agents.state import AcademicAgentState
+from app.agents.state import AcademicAgentState, OutlineSection
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ def _build_graph():
     return graph.compile()
 
 
-# 模块级编译图（惰性）
 _compiled_graph = None
 
 
@@ -50,6 +49,12 @@ def get_academic_graph():
 
 def run_academic_workflow(
     project_id: str,
+    assessment_summary: str = "",
+    paper_outline: Optional[List[OutlineSection]] = None,
+    specific_requirements: str = "",
+    background_summaries: Optional[List[str]] = None,
+    *,
+    # 兼容旧参数
     assessment_requirements: str = "",
     notebook_context: str = "",
     max_papers: int = 5,
@@ -60,13 +65,21 @@ def run_academic_workflow(
     """
     执行完整学术写作工作流。
 
-    Returns:
-        最终 AcademicAgentState（含 draft_markdown 与 apa_references）。
+    优先使用定稿字段；旧参数 assessment_requirements / notebook_context 仍可用。
     """
+    assessment = (assessment_summary or assessment_requirements or "").strip()
+    backgrounds = list(background_summaries or [])
+    if not backgrounds and notebook_context:
+        backgrounds = [notebook_context]
+
     initial: AcademicAgentState = {
         "project_id": project_id,
-        "assessment_requirements": assessment_requirements or "",
-        "notebook_context": notebook_context or "",
+        "assessment_summary": assessment,
+        "paper_outline": paper_outline or [],
+        "specific_requirements": specific_requirements or "",
+        "background_summaries": backgrounds,
+        "assessment_requirements": assessment,
+        "notebook_context": "\n\n".join(backgrounds),
         "keywords": [],
         "outline": [],
         "sources": existing_sources or [],
@@ -86,9 +99,7 @@ def run_academic_workflow(
 
 
 def run_workflow_stepwise(state: AcademicAgentState) -> AcademicAgentState:
-    """
-    无 LangGraph 时的降级顺序执行（便于测试与中断恢复）。
-    """
+    """无 LangGraph 时的降级顺序执行（便于测试与中断恢复）。"""
     state = analyze_requirements(state)
     state = search_literature(state)
     state = write_apa_draft(state)

@@ -45,13 +45,16 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> Token:
-    """OAuth2 Password 登录，返回 JWT。"""
-    result = await db.execute(select(User).where(User.username == form_data.username))
+    """OAuth2 Password 登录（用户名或邮箱），返回 JWT。"""
+    identity = (form_data.username or "").strip()
+    result = await db.execute(
+        select(User).where(or_(User.username == identity, User.email == identity))
+    )
     user = result.scalar_one_or_none()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
+            detail="用户名/邮箱或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = create_access_token(subject=str(user.id))

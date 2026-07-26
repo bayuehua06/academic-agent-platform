@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List
+from typing import Any, List
 
-from app.agents.state import AcademicAgentState
+from app.agents.state import AcademicAgentState, OutlineSection
 
 logger = logging.getLogger(__name__)
 
@@ -14,19 +14,15 @@ logger = logging.getLogger(__name__)
 def _extract_keywords(text: str, limit: int = 8) -> List[str]:
     """简易关键词提取：英文短语 + 中文 2–6 字词。"""
     keywords: List[str] = []
-    # 引号内短语优先
     quoted = re.findall(r'["""]([^"""]+)["""]', text)
     keywords.extend(q.strip() for q in quoted if len(q.strip()) > 2)
 
-    # 英文多词短语
     en_phrases = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Za-z]+){0,3})\b", text)
     keywords.extend(en_phrases)
 
-    # 中文关键词候选
     cn = re.findall(r"[\u4e00-\u9fff]{2,6}", text)
     keywords.extend(cn)
 
-    # 去重保序
     seen = set()
     unique: List[str] = []
     for kw in keywords:
@@ -42,8 +38,8 @@ def _extract_keywords(text: str, limit: int = 8) -> List[str]:
     return unique
 
 
-def _build_outline(requirements: str, notebook: str) -> List[str]:
-    """根据评估要求生成默认 APA 论文大纲。"""
+def _build_outline(requirements: str, extra: str) -> List[str]:
+    """无锁定大纲时的默认 APA 章节。"""
     base = [
         "Introduction",
         "Literature Review",
@@ -51,8 +47,7 @@ def _build_outline(requirements: str, notebook: str) -> List[str]:
         "Discussion",
         "Conclusion",
     ]
-    # 若文本提及特定章节则优先保留
-    combined = f"{requirements}\n{notebook}".lower()
+    combined = f"{requirements}\n{extra}".lower()
     extras = []
     if "case study" in combined or "案例" in combined:
         extras.append("Case Study Analysis")
@@ -63,23 +58,82 @@ def _build_outline(requirements: str, notebook: str) -> List[str]:
     return base + extras
 
 
+def _resolve_assessment(state: AcademicAgentState) -> str:
+    return (
+        (state.get("assessment_summary") or "").strip()
+        or (state.get("assessment_requirements") or "").strip()
+    )
+
+
+def _resolve_background_text(state: AcademicAgentState) -> str:
+    parts = [p.strip() for p in (state.get("background_summaries") or []) if p and str(p).strip()]
+    if parts:
+        return "\n\n".join(parts)
+    return (state.get("notebook_context") or "").strip()
+
+
+def _normalize_paper_outline(raw: Any) -> List[OutlineSection]:
+    if not isinstance(raw, list):
+        return []
+    items: List[OutlineSection] = []
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            items.append({"level": 1, "heading": entry.strip(), "key_points": ""})
+            continue
+        if not isinstance(entry, dict):
+            continue
+        heading = str(entry.get("heading") or "").strip()
+        if not heading:
+            continue
+        try:
+            level = int(entry.get("level") or 1)
+        except (TypeError, ValueError):
+            level = 1
+        items.append(
+            {
+                "level": max(1, min(level, 6)),
+                "heading": heading,
+                "key_points": str(entry.get("key_points") or "").strip(),
+            }
+        )
+    return items
+
+
 def analyze_requirements(state: AcademicAgentState) -> AcademicAgentState:
     """
-    Requirement Analyzer 节点。
+    Requirement Analyzer。
 
-    结合 assessment_requirements 与 notebook_context，输出 keywords 与 outline。
-    若配置了 OPENAI_API_KEY，可后续替换为 LLM 增强版。
+    优先级：A 定稿 > C 锁定大纲 > B 背景 > D 具体要求。
+    若已有 paper_outline，严格以其 headings 作为写作大纲。
     """
     logger.info("Agent step: analyze_requirements (project=%s)", state.get("project_id"))
-    requirements = state.get("assessment_requirements") or ""
-    notebook = state.get("notebook_context") or ""
-    combined = f"{requirements}\n\n{notebook}"
+    assessment = _resolve_assessment(state)
+    specific = (state.get("specific_requirements") or "").strip()
+    background = _resolve_background_text(state)
+    # 关键词优先级 A > C headings > B > D
+    paper_outline = _normalize_paper_outline(state.get("paper_outline"))
+    outline_text = " ".join(item["heading"] for item in paper_outline)
+    combined = "\n\n".join(
+        part for part in [assessment, outline_text, background, specific] if part
+    )
 
     keywords = _extract_keywords(combined)
-    outline = _build_outline(requirements, notebook)
+
+    if paper_outline:
+        outline = [item["heading"] for item in paper_outline]
+    else:
+        outline = _build_outline(assessment, f"{background}\n{specific}")
+        paper_outline = [
+            {"level": 1, "heading": h, "key_points": ""} for h in outline
+        ]
 
     return {
         **state,
+        "assessment_summary": assessment,
+        "specific_requirements": specific,
+        "background_summaries": state.get("background_summaries")
+        or ([background] if background else []),
+        "paper_outline": paper_outline,
         "keywords": keywords,
         "outline": outline,
         "current_step": "analyze_requirements",

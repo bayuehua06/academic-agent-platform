@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -42,15 +42,17 @@ class UserOut(BaseModel):
 
 class ProjectCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
-    assessment_requirements: Optional[str] = None
     zotero_collection_id: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
-    assessment_requirements: Optional[str] = None
     zotero_collection_id: Optional[str] = None
     status: Optional[str] = None
+    # 定稿字段：Phase 2+ 主要由 refresh 写入；允许手工微调
+    assessment_summary: Optional[str] = None
+    paper_outline: Optional[Any] = None
+    specific_requirements: Optional[str] = None
 
 
 class ProjectOut(BaseModel):
@@ -59,41 +61,67 @@ class ProjectOut(BaseModel):
     id: UUID
     user_id: UUID
     title: str
-    assessment_requirements: Optional[str] = None
+    assessment_summary: Optional[str] = None
+    paper_outline: Optional[Any] = None
+    outline_locked_at: Optional[datetime] = None
+    specific_requirements: Optional[str] = None
     zotero_collection_id: Optional[str] = None
     status: str
     created_at: datetime
     updated_at: datetime
     literature_count: int = 0
+    source_document_count: int = 0
     latest_version: Optional[int] = None
-    latest_sync_at: Optional[datetime] = None
+    outline_ready: bool = False
+    assessment_ready: bool = False
 
 
-# ---------- NotebookLM ----------
+# ---------- Source documents ----------
 
 
-class NotebookLMCreate(BaseModel):
+class SourceDocumentCreate(BaseModel):
+    """粘贴创建源文档。"""
+
+    role: str = Field(..., description="ASSESSMENT | BACKGROUND | OUTLINE | SPECIFIC")
+    source_type: str = Field("PASTE", description="PASTE | UPLOAD | NOTEBOOKLM")
+    title: Optional[str] = None
+    raw_text: Optional[str] = None
     notebook_url: Optional[str] = None
-    raw_transcript: Optional[str] = None
-    extracted_summary: Optional[str] = None
 
 
-class NotebookLMOut(BaseModel):
+class SourceDocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     project_id: UUID
+    role: str
+    source_type: str
+    title: Optional[str] = None
     notebook_url: Optional[str] = None
-    raw_transcript: Optional[str] = None
-    extracted_summary: Optional[str] = None
-    synced_at: datetime
+    original_filename: Optional[str] = None
+    content_type: Optional[str] = None
+    storage_path: Optional[str] = None
+    raw_text: Optional[str] = None
+    summary_text: Optional[str] = None
+    summary_json: Optional[Any] = None
+    status: str
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    summarized_at: Optional[datetime] = None
 
 
-class NotebookLMSyncRequest(BaseModel):
-    """扩展模式：通过 Playwright / browser-use 抓取。"""
+class OutlineLockRequest(BaseModel):
+    """将指定 OUTLINE 源文档锁定为 projects.paper_outline。"""
+
+    source_id: Optional[UUID] = None
+
+
+class NotebookSyncCreate(BaseModel):
+    """抓取 NotebookLM 对话，写入 BACKGROUND + NOTEBOOKLM 源文档。"""
 
     notebook_url: str
-    use_browser: bool = False
+    use_browser: bool = True
 
 
 # ---------- Literature ----------

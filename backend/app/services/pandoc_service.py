@@ -106,11 +106,13 @@ class PandocService:
         return self._fallback_docx_to_md(docx_path)
 
     def _fallback_docx_to_md(self, docx_path: Path) -> str:
-        """无 pandoc 时用 python-docx 提取段落为 Markdown。"""
+        """无 pandoc 时用 python-docx 提取段落与表格为 Markdown。"""
         from docx import Document
 
         doc = Document(str(docx_path))
         lines: list[str] = []
+
+        # 段落（含 Heading 样式）
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
@@ -125,7 +127,25 @@ class PandocService:
                 lines.append(f"### {text}")
             else:
                 lines.append(text)
-        return "\n\n".join(lines).strip() + "\n"
+
+        # 表格：评分 rubric 等常把正文全部放在表内
+        for table_idx, table in enumerate(doc.tables):
+            if table_idx > 0 or lines:
+                lines.append("")
+            lines.append(f"### Table {table_idx + 1}")
+            for row in table.rows:
+                cells = []
+                for cell in row.cells:
+                    cell_text = " ".join(
+                        p.text.strip() for p in cell.paragraphs if p.text and p.text.strip()
+                    )
+                    cells.append(cell_text.replace("|", "\\|") if cell_text else "")
+                # 跳过整行空白
+                if not any(cells):
+                    continue
+                lines.append("| " + " | ".join(cells) + " |")
+
+        return "\n\n".join(line for line in lines if line is not None).strip() + "\n"
 
     def save_upload(self, content: bytes, suffix: str = ".docx") -> Path:
         """保存上传文件到临时目录。"""

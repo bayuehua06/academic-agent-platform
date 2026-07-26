@@ -40,6 +40,10 @@ class Settings(BaseSettings):
 
     chrome_user_data_dir: str = ""
     chrome_profile_directory: str = "Default"
+    # 推荐：连接已开启远程调试的当前 Chrome（避免 Profile 被占用）
+    chrome_cdp_url: str = "http://127.0.0.1:9222"
+    # NotebookLM 抓取默认有头模式；仅 persistent 模式有效
+    notebooklm_headless: bool = False
 
     upload_dir: str = "./uploads"
     export_dir: str = "./exports"

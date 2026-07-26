@@ -17,14 +17,28 @@ class LiteratureSource(TypedDict, total=False):
     zotero_item_key: Optional[str]
 
 
+class OutlineSection(TypedDict, total=False):
+    """锁定后的论文大纲节。"""
+
+    level: int
+    heading: str
+    key_points: str
+
+
 class AcademicAgentState(TypedDict, total=False):
     """
     LangGraph 全局状态。
 
-    支持中断与恢复：可将序列化后的 state 持久化到项目记录中。
+    定稿输入：assessment_summary / paper_outline / specific_requirements /
+    background_summaries。兼容旧字段 assessment_requirements / notebook_context。
     """
 
     project_id: str
+    assessment_summary: str
+    paper_outline: List[OutlineSection]
+    specific_requirements: str
+    background_summaries: List[str]
+    # 兼容旧调用
     assessment_requirements: str
     notebook_context: str
     keywords: List[str]

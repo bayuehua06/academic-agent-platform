@@ -1,5 +1,17 @@
 """数据库包导出。"""
 
-from app.db.models import DraftVersion, Literature, NotebookLMInput, Project, User
+from app.db.models import (
+    DraftVersion,
+    Literature,
+    Project,
+    ProjectSourceDocument,
+    User,
+)
 
-__all__ = ["User", "Project", "NotebookLMInput", "Literature", "DraftVersion"]
+__all__ = [
+    "User",
+    "Project",
+    "ProjectSourceDocument",
+    "Literature",
+    "DraftVersion",
+]

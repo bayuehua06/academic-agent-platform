@@ -10,11 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.agents.graph import run_academic_workflow
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.db.models import DraftVersion, Literature, NotebookLMInput, Project, User
+from app.db.models import DraftVersion, Literature, Project, User
 from app.models.schemas import (
     AgentRunRequest,
     DraftVersionOut,
@@ -22,6 +23,7 @@ from app.models.schemas import (
     ProjectOut,
     ProjectUpdate,
 )
+from app.services.project_assembly import ensure_writing_ready
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -35,7 +37,7 @@ async def _get_user_project(
         .options(
             selectinload(Project.literatures),
             selectinload(Project.draft_versions),
-            selectinload(Project.notebook_inputs),
+            selectinload(Project.source_documents),
         )
     )
     project = result.scalar_one_or_none()
@@ -45,25 +47,37 @@ async def _get_user_project(
 
 
 def _to_project_out(project: Project) -> ProjectOut:
-    latest_version = None
-    if project.draft_versions:
-        latest_version = max(d.version_number for d in project.draft_versions)
-    latest_sync = None
-    if project.notebook_inputs:
-        latest_sync = max(n.synced_at for n in project.notebook_inputs)
+    """将 Project ORM 转为响应（要求 literatures / draft_versions / source_documents 已加载）。"""
+    literatures = project.__dict__.get("literatures") or []
+    drafts = project.__dict__.get("draft_versions") or []
+    sources = project.__dict__.get("source_documents") or []
+
+    latest_version = max((d.version_number for d in drafts), default=None)
     return ProjectOut(
         id=project.id,
         user_id=project.user_id,
         title=project.title,
-        assessment_requirements=project.assessment_requirements,
+        assessment_summary=project.assessment_summary,
+        paper_outline=project.paper_outline,
+        outline_locked_at=project.outline_locked_at,
+        specific_requirements=project.specific_requirements,
         zotero_collection_id=project.zotero_collection_id,
         status=project.status,
         created_at=project.created_at,
         updated_at=project.updated_at,
-        literature_count=len(project.literatures or []),
+        literature_count=len(literatures),
+        source_document_count=len(sources),
         latest_version=latest_version,
-        latest_sync_at=latest_sync,
+        outline_ready=bool(project.paper_outline and project.outline_locked_at),
+        assessment_ready=bool(project.assessment_summary),
     )
+
+
+def _mark_empty_collections(project: Project) -> None:
+    """避免异步会话下对空关系的懒加载。"""
+    set_committed_value(project, "literatures", [])
+    set_committed_value(project, "draft_versions", [])
+    set_committed_value(project, "source_documents", [])
 
 
 @router.get("", response_model=List[ProjectOut])
@@ -78,7 +92,7 @@ async def list_projects(
         .options(
             selectinload(Project.literatures),
             selectinload(Project.draft_versions),
-            selectinload(Project.notebook_inputs),
+            selectinload(Project.source_documents),
         )
         .order_by(Project.updated_at.desc())
     )
@@ -96,16 +110,13 @@ async def create_project(
     project = Project(
         user_id=current_user.id,
         title=payload.title,
-        assessment_requirements=payload.assessment_requirements,
         zotero_collection_id=payload.zotero_collection_id,
         status="INITIALIZING",
     )
     db.add(project)
     await db.flush()
     await db.refresh(project)
-    project.literatures = []
-    project.draft_versions = []
-    project.notebook_inputs = []
+    _mark_empty_collections(project)
     return _to_project_out(project)
 
 
@@ -134,7 +145,7 @@ async def update_project(
         setattr(project, key, value)
     project.updated_at = datetime.now(timezone.utc)
     await db.flush()
-    await db.refresh(project)
+    project = await _get_user_project(project_id, current_user, db)
     return _to_project_out(project)
 
 
@@ -158,13 +169,21 @@ async def run_agent(
 ) -> DraftVersionOut:
     """触发 LangGraph 学术写作工作流，并持久化文献与草稿版本。"""
     project = await _get_user_project(project_id, current_user, db)
+    try:
+        ensure_writing_ready(project)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     project.status = "FETCHING_PAPERS"
     await db.flush()
 
-    notebook_context = ""
-    if project.notebook_inputs:
-        latest = max(project.notebook_inputs, key=lambda n: n.synced_at)
-        notebook_context = latest.extracted_summary or latest.raw_transcript or ""
+    assessment_text = project.assessment_summary or ""
+    background_parts = [
+        (d.summary_text or d.raw_text or "").strip()
+        for d in (project.source_documents or [])
+        if d.role == "BACKGROUND" and (d.summary_text or d.raw_text)
+    ]
+    paper_outline = project.paper_outline if isinstance(project.paper_outline, list) else []
 
     existing_sources = None
     if payload.skip_search and project.literatures:
@@ -187,8 +206,10 @@ async def run_agent(
         await db.flush()
         result = run_academic_workflow(
             project_id=str(project.id),
-            assessment_requirements=project.assessment_requirements or "",
-            notebook_context=notebook_context,
+            assessment_summary=assessment_text,
+            paper_outline=paper_outline,
+            specific_requirements=project.specific_requirements or "",
+            background_summaries=background_parts,
             max_papers=payload.max_papers,
             skip_search=payload.skip_search,
             zotero_collection_id=project.zotero_collection_id,
@@ -199,7 +220,6 @@ async def run_agent(
         await db.flush()
         raise HTTPException(status_code=500, detail=f"Agent 执行失败: {exc}") from exc
 
-    # 持久化文献（非 skip_search 时替换选中集）
     if not payload.skip_search:
         for lit in list(project.literatures):
             await db.delete(lit)
@@ -219,7 +239,6 @@ async def run_agent(
                 )
             )
 
-    # 新版本号
     ver_result = await db.execute(
         select(func.coalesce(func.max(DraftVersion.version_number), 0)).where(
             DraftVersion.project_id == project.id

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, clearToken, Project } from "@/lib/api";
-import { formatDate, STATUS_LABELS, statusColor } from "@/lib/utils";
+import { STATUS_LABELS, statusColor } from "@/lib/utils";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -107,9 +107,17 @@ export default function DashboardPage() {
                       {p.latest_version != null ? `v${p.latest_version}` : "—"}
                     </dd>
                   </div>
-                  <div className="col-span-2">
-                    <dt>最近同步</dt>
-                    <dd>{formatDate(p.latest_sync_at)}</dd>
+                  <div>
+                    <dt>源文档</dt>
+                    <dd className="text-sm font-medium text-ink">
+                      {p.source_document_count ?? 0}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>大纲</dt>
+                    <dd className="text-sm font-medium text-ink">
+                      {p.outline_ready ? "已锁定" : "未就绪"}
+                    </dd>
                   </div>
                 </dl>
               </Link>

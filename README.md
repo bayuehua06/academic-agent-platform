@@ -15,47 +15,73 @@
 
 ## 快速开始
 
-固定端口：**前端 `1980`** / **后端 `1976`**。若端口已被占用，`npm run dev` 会提示先 kill。
+固定端口：**前端 `1980`** / **后端 `1976`**。
 
-### 1. 启动数据库
+### 一键启动（推荐）
 
 ```bash
-docker compose up -d
+./start.sh
 ```
 
-### 2. 首次安装依赖
+会自动：停止旧进程 → 检查/释放端口 → 安装依赖 → 初始化 PostgreSQL（Docker 或本机）→ 启动前后端。
+
+停止：
 
 ```bash
-# 后端
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-
-# 前端 + 根脚本
-cd ..
-npm run install:all
-cp frontend/.env.example frontend/.env.local
-```
-
-### 3. 一键启动前后端
-
-```bash
-npm run dev
+./stop.sh
 ```
 
 - 控制面板：http://localhost:1980
 - API 文档：http://localhost:1976/docs
 
+### 仅用 npm（需已装好依赖与数据库）
+
+```bash
+npm run dev
+```
+
+端口已被占用时会提示先 kill；也可用 `./stop.sh` 释放。
+
+### 手动准备（可选）
+
+数据库二选一：
+
+```bash
+# A. Docker
+docker compose up -d
+
+# B. 本机 PostgreSQL（无 Docker 时 ./start.sh 会自动创建 academic 角色与库）
+./scripts/ensure-db.sh
+```
+
+首次依赖：
+
+```bash
+cd backend && python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+cd .. && npm run install:all
+cp frontend/.env.example frontend/.env.local
+```
+
 ## 目录结构
 
 ```
 academic-agent-platform/
-├── backend/          # FastAPI + LangGraph
-├── frontend/         # Next.js 管理后台
+├── backend/                 # FastAPI + LangGraph
+├── frontend/                # Next.js 管理后台
+├── docs/                    # 核心与规划文档
+│   ├── api_reference.md
+│   ├── database_schema.md
+│   ├── implementation_status.md
+│   └── 20260725-*.md        # 已完成的规划/实现文档
+├── scripts/                 # ensure-db / npm run dev 辅助脚本
+├── start.sh                 # 一键初始化并启动
+├── stop.sh                  # 停止服务并释放端口
 ├── docker-compose.yml
-└── README.md
+├── README.md
+├── CHANGELOG.md
+└── .cursorrules
 ```
 
 ## 核心功能
@@ -66,10 +92,19 @@ academic-agent-platform/
 4. **APA 7th 草稿** — LangGraph 工作流：需求分析 → 检索 → 撰写 → 参考文献格式化
 5. **版本控制** — Draft 版本历史、Word/PDF 导出、Word 逆向导入 Markdown
 
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [CHANGELOG.md](./CHANGELOG.md) | 版本与功能变更 |
+| [docs/api_reference.md](./docs/api_reference.md) | HTTP API |
+| [docs/database_schema.md](./docs/database_schema.md) | 数据表结构 |
+| [docs/implementation_status.md](./docs/implementation_status.md) | 实现进度 |
+
 ## 环境变量
 
 见 `backend/.env.example` 与 `frontend/.env.example`。
 
 ## 开发状态
 
-当前为可运行的基础框架（脚手架 + 数据模型 + 鉴权 + 服务桩 + Agent 图 + 前端看板）。完整文献检索依赖本地 Chrome Profile / API Key 配置后启用。
+见 [docs/implementation_status.md](./docs/implementation_status.md)。当前为可运行基础框架；完整文献检索依赖 Chrome Profile / API Key 配置后启用。

@@ -1,0 +1,113 @@
+"""项目 CRUD 与 Agent 触发 API 测试。"""
+
+from tests.helpers import prepare_writing_inputs
+
+
+async def test_list_projects_empty(auth_client):
+    res = await auth_client.get("/api/projects")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+async def test_create_and_get_project(auth_client):
+    create = await auth_client.post(
+        "/api/projects",
+        json={"title": "APA Review"},
+    )
+    assert create.status_code == 201
+    project = create.json()
+    assert project["title"] == "APA Review"
+    assert project["status"] == "INITIALIZING"
+    assert project["literature_count"] == 0
+    assert project["source_document_count"] == 0
+    assert project["assessment_summary"] is None
+    assert project["assessment_ready"] is False
+    assert project["outline_ready"] is False
+
+    got = await auth_client.get(f"/api/projects/{project['id']}")
+    assert got.status_code == 200
+    assert got.json()["id"] == project["id"]
+
+
+async def test_update_project(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Draft"})
+    pid = create.json()["id"]
+
+    patch = await auth_client.patch(
+        f"/api/projects/{pid}",
+        json={
+            "title": "Updated",
+            "assessment_summary": "Focus on ethics",
+            "specific_requirements": "Use APA 7th",
+        },
+    )
+    assert patch.status_code == 200
+    body = patch.json()
+    assert body["title"] == "Updated"
+    assert body["assessment_summary"] == "Focus on ethics"
+    assert body["specific_requirements"] == "Use APA 7th"
+    assert body["assessment_ready"] is True
+
+
+async def test_delete_project(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Temp"})
+    pid = create.json()["id"]
+
+    deleted = await auth_client.delete(f"/api/projects/{pid}")
+    assert deleted.status_code == 204
+
+    missing = await auth_client.get(f"/api/projects/{pid}")
+    assert missing.status_code == 404
+
+
+async def test_project_requires_auth(client):
+    res = await client.get("/api/projects")
+    assert res.status_code == 401
+
+
+async def test_old_notebook_routes_gone(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "No Notebook"})
+    pid = create.json()["id"]
+    res = await auth_client.get(f"/api/notebook/{pid}")
+    assert res.status_code == 404
+
+
+async def test_run_agent_requires_assessment_and_locked_outline(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Not Ready"})
+    pid = create.json()["id"]
+    run = await auth_client.post(
+        f"/api/projects/{pid}/run-agent",
+        json={"max_papers": 3, "skip_search": False},
+    )
+    assert run.status_code == 400
+    assert "Assessment" in run.json()["detail"] or "大纲" in run.json()["detail"]
+
+
+async def test_run_agent_creates_draft_and_literatures(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Agent Run"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+
+    run = await auth_client.post(
+        f"/api/projects/{pid}/run-agent",
+        json={"max_papers": 3, "skip_search": False},
+    )
+    assert run.status_code == 200
+    draft = run.json()
+    assert draft["version_number"] == 1
+    assert draft["source_type"] == "AGENT_GEN"
+    assert draft["content_markdown"]
+    assert draft["apa_references_block"]
+
+    project = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert project["status"] == "COMPLETED"
+    assert project["literature_count"] == 3
+    assert project["latest_version"] == 1
+    assert project["assessment_ready"] is True
+    assert project["outline_ready"] is True
+
+    lits = (
+        await auth_client.get(f"/api/zotero/projects/{pid}/literatures")
+    ).json()
+    assert len(lits) == 3
+    assert all(item["title"] for item in lits)

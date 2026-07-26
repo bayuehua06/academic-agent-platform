@@ -4,14 +4,47 @@ export type Project = {
   id: string;
   user_id: string;
   title: string;
-  assessment_requirements?: string | null;
+  assessment_summary?: string | null;
+  paper_outline?: OutlineItem[] | null;
+  outline_locked_at?: string | null;
+  specific_requirements?: string | null;
   zotero_collection_id?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
   literature_count: number;
+  source_document_count?: number;
   latest_version?: number | null;
-  latest_sync_at?: string | null;
+  outline_ready?: boolean;
+  assessment_ready?: boolean;
+};
+
+export type OutlineItem = {
+  level: number;
+  heading: string;
+  key_points?: string;
+};
+
+export type SourceRole = "ASSESSMENT" | "BACKGROUND" | "OUTLINE" | "SPECIFIC";
+
+export type SourceDocument = {
+  id: string;
+  project_id: string;
+  role: SourceRole | string;
+  source_type: string;
+  title?: string | null;
+  notebook_url?: string | null;
+  original_filename?: string | null;
+  content_type?: string | null;
+  storage_path?: string | null;
+  raw_text?: string | null;
+  summary_text?: string | null;
+  summary_json?: OutlineItem[] | null;
+  status: string;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  summarized_at?: string | null;
 };
 
 export type Literature = {
@@ -37,15 +70,6 @@ export type DraftVersion = {
   source_type: string;
   changelog?: string | null;
   created_at: string;
-};
-
-export type NotebookInput = {
-  id: string;
-  project_id: string;
-  notebook_url?: string | null;
-  raw_transcript?: string | null;
-  extracted_summary?: string | null;
-  synced_at: string;
 };
 
 function getToken(): string | null {
@@ -113,6 +137,69 @@ export async function register(username: string, email: string, password: string
   return apiFetch("/auth/register", {
     method: "POST",
     body: JSON.stringify({ username, email, password }),
+  });
+}
+
+export async function listSources(projectId: string, role?: SourceRole) {
+  const q = role ? `?role=${role}` : "";
+  return apiFetch<SourceDocument[]>(`/projects/${projectId}/sources${q}`);
+}
+
+export async function pasteSource(
+  projectId: string,
+  payload: { role: SourceRole; raw_text: string; title?: string },
+) {
+  return apiFetch<SourceDocument>(`/projects/${projectId}/sources`, {
+    method: "POST",
+    body: JSON.stringify({
+      role: payload.role,
+      source_type: "PASTE",
+      title: payload.title,
+      raw_text: payload.raw_text,
+    }),
+  });
+}
+
+export async function uploadSource(
+  projectId: string,
+  role: SourceRole,
+  file: File,
+  title?: string,
+) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("role", role);
+  if (title) form.append("title", title);
+  return apiFetch<SourceDocument>(`/projects/${projectId}/sources/upload`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function deleteSource(projectId: string, sourceId: string) {
+  return apiFetch<void>(`/projects/${projectId}/sources/${sourceId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function summarizeSource(projectId: string, sourceId: string) {
+  return apiFetch<SourceDocument>(
+    `/projects/${projectId}/sources/${sourceId}/summarize`,
+    { method: "POST" },
+  );
+}
+
+export async function lockOutline(projectId: string, sourceId?: string) {
+  return apiFetch<SourceDocument>(`/projects/${projectId}/outline/lock`, {
+    method: "POST",
+    body: JSON.stringify(sourceId ? { source_id: sourceId } : {}),
+  });
+}
+
+export async function syncNotebook(projectId: string, notebookUrl: string) {
+  return apiFetch<SourceDocument>(`/projects/${projectId}/sources/notebook-sync`, {
+    method: "POST",
+    body: JSON.stringify({ notebook_url: notebookUrl, use_browser: true }),
   });
 }
 

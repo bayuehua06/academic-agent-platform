@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Academic Agent Platform",
-  description: "学术辅助平台 — NotebookLM · Zotero · APA 7th · LangGraph",
+  description: "学术辅助平台 — Assessment · Outline · NotebookLM · Zotero · APA 7th",
 };
 
 export default function RootLayout({

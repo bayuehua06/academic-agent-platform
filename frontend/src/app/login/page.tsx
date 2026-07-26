@@ -38,13 +38,15 @@ export default function LoginPage() {
         <form onSubmit={onSubmit} className="card mt-8 space-y-4">
           <div>
             <label className="label" htmlFor="username">
-              用户名
+              用户名或邮箱
             </label>
             <input
               id="username"
               className="input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              placeholder="song.chen 或邮箱"
+              autoComplete="username"
               required
             />
           </div>

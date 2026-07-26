@@ -95,19 +95,30 @@ def _sync_zotero(sources: List[LiteratureSource], collection_id: str | None) -> 
 
 
 def search_literature(state: AcademicAgentState) -> AcademicAgentState:
-    """Literature Searcher 节点。"""
+    """Literature Searcher：关键词优先来自 A，并并入 C 各节标题。"""
     logger.info("Agent step: search_literature (project=%s)", state.get("project_id"))
 
     if state.get("skip_search") and state.get("sources"):
         return {**state, "current_step": "search_literature"}
 
-    keywords = state.get("keywords") or ["academic research"]
+    keywords = list(state.get("keywords") or [])
+    for section in state.get("paper_outline") or []:
+        if isinstance(section, dict):
+            heading = (section.get("heading") or "").strip()
+            if heading and heading not in keywords:
+                keywords.append(heading)
+        elif isinstance(section, str) and section.strip():
+            keywords.append(section.strip())
+    if not keywords:
+        keywords = ["academic research"]
+
     max_papers = int(state.get("max_papers") or 5)
     sources = _search_with_browser(keywords, max_papers)
     sources = _sync_zotero(sources, state.get("zotero_collection_id"))
 
     return {
         **state,
+        "keywords": keywords,
         "sources": sources,
         "current_step": "search_literature",
         "error": None,

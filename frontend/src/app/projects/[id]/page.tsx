@@ -2,19 +2,21 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DraftViewer } from "@/components/DraftViewer";
+import { ProjectInputs } from "@/components/ProjectInputs";
 import { VersionHistory } from "@/components/VersionHistory";
 import { ZoteroList } from "@/components/ZoteroList";
 import {
   apiFetch,
   downloadExport,
   DraftVersion,
+  listSources,
   Literature,
-  NotebookInput,
   Project,
+  SourceDocument,
 } from "@/lib/api";
-import { formatDate, STATUS_LABELS, statusColor } from "@/lib/utils";
+import { STATUS_LABELS, statusColor } from "@/lib/utils";
 
 type Tab = "inputs" | "literature" | "draft";
 
@@ -25,29 +27,31 @@ export default function ProjectDetailPage() {
 
   const [tab, setTab] = useState<Tab>("inputs");
   const [project, setProject] = useState<Project | null>(null);
-  const [notebooks, setNotebooks] = useState<NotebookInput[]>([]);
+  const [sources, setSources] = useState<SourceDocument[]>([]);
   const [literatures, setLiteratures] = useState<Literature[]>([]);
   const [drafts, setDrafts] = useState<DraftVersion[]>([]);
   const [selectedDraft, setSelectedDraft] = useState<DraftVersion | null>(null);
-  const [assessment, setAssessment] = useState("");
-  const [transcript, setTranscript] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [p, nbs, lits, vers] = await Promise.all([
+    const [p, srcs, lits, vers] = await Promise.all([
       apiFetch<Project>(`/projects/${projectId}`),
-      apiFetch<NotebookInput[]>(`/notebook/${projectId}`),
+      listSources(projectId),
       apiFetch<Literature[]>(`/zotero/projects/${projectId}/literatures`),
       apiFetch<DraftVersion[]>(`/drafts/${projectId}`),
     ]);
     setProject(p);
-    setAssessment(p.assessment_requirements || "");
-    setNotebooks(nbs);
+    setSources(srcs);
     setLiteratures(lits);
     setDrafts(vers);
-    setSelectedDraft(vers[0] || null);
+    setSelectedDraft((prev) => {
+      if (prev && vers.some((v) => v.id === prev.id)) {
+        return vers.find((v) => v.id === prev.id) || vers[0] || null;
+      }
+      return vers[0] || null;
+    });
   }, [projectId]);
 
   useEffect(() => {
@@ -58,44 +62,18 @@ export default function ProjectDetailPage() {
     loadAll().catch((err) => setError(err.message));
   }, [loadAll, router]);
 
-  async function saveAssessment(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const p = await apiFetch<Project>(`/projects/${projectId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ assessment_requirements: assessment }),
-      });
-      setProject(p);
-      setMessage("Assessment 已保存");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function syncNotebook(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await apiFetch(`/notebook/${projectId}`, {
-        method: "POST",
-        body: JSON.stringify({ raw_transcript: transcript }),
-      });
-      setTranscript("");
-      setMessage("NotebookLM 输入已同步");
-      await loadAll();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "同步失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function runAgent() {
+    if (!project?.assessment_ready) {
+      setError("请先添加 Assessment（A）材料并生成定稿摘要");
+      setTab("inputs");
+      return;
+    }
+    if (!project?.outline_ready) {
+      setError("请先上传论文大纲（C）并点击「锁定」");
+      setTab("inputs");
+      return;
+    }
+
     setBusy(true);
     setError("");
     setMessage("Agent 运行中…");
@@ -169,6 +147,8 @@ export default function ProjectDetailPage() {
     { id: "draft", label: "Draft & Versions" },
   ];
 
+  const canRun = Boolean(project.assessment_ready && project.outline_ready);
+
   return (
     <main className="min-h-screen">
       <header className="border-b border-stone-200 bg-white">
@@ -182,9 +162,20 @@ export default function ProjectDetailPage() {
               {STATUS_LABELS[project.status] || project.status}
             </span>
           </div>
-          <button type="button" className="btn" onClick={runAgent} disabled={busy}>
-            运行学术 Agent
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              className="btn"
+              onClick={runAgent}
+              disabled={busy || !canRun}
+              title={canRun ? "运行学术 Agent" : "需先完成 A 定稿并锁定 C 大纲"}
+            >
+              运行学术 Agent
+            </button>
+            {!canRun && (
+              <p className="text-xs text-stone-500">需 A 就绪 + C 已锁定</p>
+            )}
+          </div>
         </div>
         <nav className="mx-auto flex max-w-5xl gap-1 px-4">
           {tabs.map((t) => (
@@ -212,42 +203,16 @@ export default function ProjectDetailPage() {
         )}
 
         {tab === "inputs" && (
-          <div className="grid gap-6 lg:grid-cols-2">
-            <form onSubmit={saveAssessment} className="card space-y-3">
-              <h2 className="font-display text-lg font-semibold">Assessment 要求</h2>
-              <textarea
-                className="input min-h-[180px]"
-                value={assessment}
-                onChange={(e) => setAssessment(e.target.value)}
-                placeholder="粘贴课程作业 / 评估要求…"
-              />
-              <button type="submit" className="btn" disabled={busy}>
-                保存
-              </button>
-            </form>
-            <form onSubmit={syncNotebook} className="card space-y-3">
-              <h2 className="font-display text-lg font-semibold">NotebookLM 输入</h2>
-              <textarea
-                className="input min-h-[180px]"
-                value={transcript}
-                onChange={(e) => setTranscript(e.target.value)}
-                placeholder="粘贴 NotebookLM 对话 / 笔记…"
-              />
-              <button type="submit" className="btn" disabled={busy || !transcript.trim()}>
-                同步要点
-              </button>
-              {notebooks[0] && (
-                <div className="mt-4 rounded-md bg-stone-50 p-3 text-sm">
-                  <p className="text-xs text-stone-400">
-                    最近同步 {formatDate(notebooks[0].synced_at)}
-                  </p>
-                  <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-stone-600">
-                    {notebooks[0].extracted_summary || notebooks[0].raw_transcript}
-                  </pre>
-                </div>
-              )}
-            </form>
-          </div>
+          <ProjectInputs
+            projectId={projectId}
+            project={project}
+            sources={sources}
+            busy={busy}
+            setBusy={setBusy}
+            onMessage={setMessage}
+            onError={setError}
+            onReload={loadAll}
+          />
         )}
 
         {tab === "literature" && (
