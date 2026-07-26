@@ -5,6 +5,7 @@ from app.agents.nodes.apa_formatter import format_apa_reference, format_apa_refe
 from app.agents.nodes.requirement_analyzer import analyze_requirements
 from app.agents.nodes.writer import format_intext_citation, write_apa_draft
 from app.agents.state import AcademicAgentState, LiteratureSource
+from app.services import summarizer as summarizer_module
 
 
 def test_intext_citation_single_double_etal():
@@ -53,7 +54,8 @@ def test_apa_reference_formatting_and_sort():
     assert "*Alpha Methods*" in refs
 
 
-def test_write_apa_draft_follows_paper_outline_levels():
+def test_write_apa_draft_follows_paper_outline_levels(monkeypatch):
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
     state = AcademicAgentState(
         project_id="p1",
         paper_outline=[
@@ -72,6 +74,7 @@ def test_write_apa_draft_follows_paper_outline_levels():
     )
     out = write_apa_draft(state)
     md = out["draft_markdown"]
+    assert out.get("writer_mode") == "template"
     assert "# Introduction" in md
     assert "## Methods Detail" in md
     assert "(Smith, 2024)" in md
@@ -93,8 +96,8 @@ def test_analyze_uses_locked_paper_outline():
     assert out["paper_outline"][0]["heading"] == "Custom Intro"
 
 
-
-def test_workflow_stepwise_end_to_end():
+def test_workflow_stepwise_end_to_end(monkeypatch):
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
     state = AcademicAgentState(
         project_id="p1",
         assessment_requirements="Literature review on education technology.",
@@ -109,7 +112,8 @@ def test_workflow_stepwise_end_to_end():
     assert result["apa_references"]
 
 
-def test_langgraph_compile_and_invoke():
+def test_langgraph_compile_and_invoke(monkeypatch):
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
     graph = get_academic_graph()
     result = graph.invoke(
         {

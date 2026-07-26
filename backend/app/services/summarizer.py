@@ -23,20 +23,25 @@ def has_openai_key() -> bool:
 
 _ROLE_PROMPTS = {
     "ASSESSMENT": (
-        "你是学术写作助手。请将以下 Assessment / Rubric 材料压缩为清晰摘要，"
-        "保留评分标准、字数/格式要求、必答问题与关键约束。用中文或原文语言输出，不要编造。"
+        "You are an academic writing assistant. Compress the following Assessment / Rubric "
+        "into a clear summary. Keep grading criteria, length/format rules, required questions, "
+        "and hard constraints. Write in the SAME language as the source text (do not translate). "
+        "Do not invent content."
     ),
     "BACKGROUND": (
-        "你是学术写作助手。请将以下背景材料（笔记/对话/文献摘录）压缩为要点摘要，"
-        "保留可引用的观点、定义与事实。不要编造。"
+        "You are an academic writing assistant. Compress the following background material "
+        "(notes/dialogue/excerpts) into key points. Keep citable claims, definitions, and facts. "
+        "Write in the SAME language as the source text. Do not invent content."
     ),
     "SPECIFIC": (
-        "你是学术写作助手。请将以下具体写作要求提炼为简短条目"
-        "（字数、引用风格、禁止事项等）。不要编造。"
+        "You are an academic writing assistant. Distill the following writing requirements into "
+        "short bullets (word count, citation style, must-include/avoid, language, etc.). "
+        "Write in the SAME language as the source text. Do not invent content."
     ),
     "OUTLINE": (
-        "你是学术写作助手。下面是论文大纲各节正文要点，请在保持原标题结构的前提下"
-        "压缩每节 key_points，输出仍用「## 标题」分段。不要编造新章节。"
+        "You are an academic writing assistant. Compress each section's key_points while keeping "
+        "the existing heading structure. Still use Markdown headings like `## Title`. "
+        "Keep the same language as the source. Do not invent new sections."
     ),
 }
 
@@ -90,7 +95,8 @@ class SummarizerService:
             )
             resp = llm.invoke(
                 [
-                    SystemMessage(content="你是学术写作助手，只输出合并后的摘要正文。"),
+                    SystemMessage(content="You are an academic writing assistant. Output only the merged summary body in the same language as the inputs."),
+
                     HumanMessage(content=prompt),
                 ]
             )

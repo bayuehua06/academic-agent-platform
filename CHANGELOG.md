@@ -2,6 +2,44 @@
 
 本文件记录 Academic Agent Platform 的版本与功能变更摘要（功能 / API / 组件 / 数据库）。详细实现见 `docs/`。
 
+## [1.2.0] - 2026-07-26
+
+### 新增 / 变更
+
+- **Z5 按章检索词**：有 OpenAI Key 时按章节 heading / 要点 + A/D 定稿生成检索词；无 Key 或失败时规则回退
+- **Writer LLM 长文**：`run-agent` 有 Key 时按锁定大纲分节撰写；从 D+A 抽取通用 HARD CONSTRAINTS（字数/引用/必含/禁止/语言等），原文 D 始终附带；分节扩写 + 成稿校验补写；无 Key / 失败回退模板
+- **Writer 独立模型**：`OPENAI_WRITER_MODEL`（默认 `gpt-4o`）；Summarizer / Z5 仍用 `OPENAI_MODEL`（默认 `gpt-4o-mini`）
+- **默认学术英文**：摘要跟原文语言、不默认译中；写作默认 English，仅约束明确要求中文时才用中文
+- **项目 UX**：仪表盘改名 / 删除；进度状态按就绪度推导（`INITIALIZING` → … → `HAS_DRAFT`，不再误用「已完成」）；Inputs 列表短预览 +「查看全部」
+
+### API
+
+- `POST /api/projects/{id}/literature-search/suggest-query`：Body `{ outline_heading }` → `{ query, mode, openai_configured }`
+- `PATCH` / `DELETE /api/projects/{id}`：改名与删除（前端补齐）
+- `GET` 项目列表/详情：`status` 为推导展示值；旧 `COMPLETED` 视为 `HAS_DRAFT`
+- `run-agent`：草稿 changelog 可含 model / words / target / verify_ok
+
+### 组件 / 服务
+
+- `literature_query.py`（Z5）、`writing_constraints.py`、`writer.py`（分节 / 扩写 / 校验）
+- `llm_client.resolve_model(purpose=writer|default)`
+- `LiteratureConfirmPanel`：生成本章检索词 / 可选进章自动生成
+- Dashboard：改名、删除；进度标签文案
+
+### 配置
+
+- `OPENAI_WRITER_MODEL`（见 `backend/.env.example`）
+
+### 文档
+
+- 更新 README、`api_reference`、`database_schema`、`implementation_status`、`openai-llm-usage`
+
+### 已知限制（本版本）
+
+- Writer / Z5 依赖 OpenAI 额度与网络；失败自动回退
+- 检索 run 仍存进程内存；重启后端后候选会话丢失（已确认文献在 Zotero/DB）
+- 长稿质量仍受模型与约束抽取影响，需人工审阅
+
 ## [1.1.2] - 2026-07-26
 
 ### 新增 / 变更
@@ -27,8 +65,8 @@
 
 ### 已知限制（本版本）
 
-- **Z5 未做**：尚无按章 LLM 自动造检索词
-- Writer 正文仍为规则模板；检索 run 存进程内存
+- **Z5 未做**：尚无按章 LLM 自动造检索词（**1.2.0 已实现**）
+- Writer 正文仍为规则模板；检索 run 存进程内存（**Writer LLM 见 1.2.0**）
 
 ## [1.1.1] - 2026-07-26
 

@@ -34,6 +34,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # 前端 fetch 下载需能读取文件名
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)

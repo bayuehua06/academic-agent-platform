@@ -29,7 +29,9 @@ from app.services.literature_workflow import (
     dedupe_candidates,
     import_confirmed_items,
 )
+from app.services.literature_query import suggest_chapter_query
 from app.services.zotero_service import zotero_service
+from app.services.summarizer import has_openai_key
 
 router = APIRouter(tags=["literature-search"])
 settings = get_settings()
@@ -53,6 +55,12 @@ class LiteratureConfirmRequest(BaseModel):
     """确认入库：按候选下标勾选。"""
 
     indices: List[int] = Field(..., min_length=1)
+
+
+class SuggestQueryRequest(BaseModel):
+    """Z5：为指定章节生成检索词。"""
+
+    outline_heading: str = Field(..., min_length=1)
 
 
 async def _assert_project_owner(
@@ -94,7 +102,54 @@ async def get_literature_providers(
 ) -> dict:
     """列出全局检索库注册表（来自 .env）。"""
     _ = current_user
-    return {"providers": list_providers()}
+    return {"providers": list_providers(), "openai_configured": has_openai_key()}
+
+
+@router.post("/projects/{project_id}/literature-search/suggest-query")
+async def suggest_literature_query(
+    project_id: UUID,
+    payload: SuggestQueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Z5：根据章节 heading / key_points + 定稿摘要生成检索词。
+
+    无 OPENAI_API_KEY 时返回规则回退词（mode=fallback）。
+    """
+    project = await _assert_project_owner(project_id, current_user, db)
+    heading = payload.outline_heading.strip()
+    outline = project.paper_outline if isinstance(project.paper_outline, list) else []
+    key_points = ""
+    headings = set()
+    for item in outline:
+        if not isinstance(item, dict):
+            continue
+        h = (item.get("heading") or "").strip()
+        if not h:
+            continue
+        headings.add(h)
+        if h == heading:
+            key_points = (item.get("key_points") or "").strip()
+    if headings and heading not in headings:
+        raise HTTPException(status_code=400, detail=f"大纲中不存在章节: {heading!r}")
+
+    try:
+        query, mode = suggest_chapter_query(
+            heading=heading,
+            key_points=key_points,
+            assessment_summary=project.assessment_summary or "",
+            specific_requirements=project.specific_requirements or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "outline_heading": heading,
+        "query": query,
+        "mode": mode,
+        "openai_configured": has_openai_key(),
+    }
 
 
 @router.post("/projects/{project_id}/literature-search/ping")

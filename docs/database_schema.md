@@ -5,6 +5,7 @@ ORM：SQLAlchemy Async（`backend/app/db/models.py`）。开发环境可用 `cre
 
 扩展：`pgcrypto`（`gen_random_uuid`，见 `backend/app/db/init.sql`）。
 
+> **2026-07-26 / v1.2.0**：无新表；项目 `status` API 按就绪度推导（见下）；Writer/Z5 为服务层能力。  
 > **2026-07-26 / v1.1.0**：删除 `notebooklm_inputs`；新增 `project_source_documents`；`projects` 增加定稿缓存字段。  
 > **2026-07-26 / v1.1.2**：检索库字段不变；IEEE+ACM 均已实现，项目 `literature_databases` 由 UI 勾选驱动。  
 > **2026-07-26 / v1.1.1**：`projects.literature_databases`；`literatures` 增加章节/确认/子集合字段。设计归档见 `docs/20260726-literature-zotero-search-discussion.md`。
@@ -43,13 +44,24 @@ users 1──* projects 1──* project_source_documents
 | specific_requirements | TEXT | | **定稿**：D；D 变更后更新 |
 | zotero_collection_id | VARCHAR(100) | | |
 | literature_databases | JSONB | | 本项目启用的检索库 id，如 `["ieee"]` / `["ieee","acm"]`；空则用全局默认；多库时各取 N 条后去重 |
-| status | VARCHAR(50) | default `INITIALIZING` | |
+| status | VARCHAR(50) | default `INITIALIZING` | 库内进度标记；API 对外按材料就绪度推导（见下） |
 | created_at | TIMESTAMPTZ | default now() | |
 | updated_at | TIMESTAMPTZ | default now(), on update | |
 
 **已删除**：`assessment_requirements`（原文改由 source documents 承载）。
 
-**status**：`INITIALIZING` | `FETCHING_PAPERS` | `DRAFTING` | `COMPLETED`
+**status（API 展示）**：按进度推导，不是「作业已完成」：
+
+| 值 | 含义 |
+|----|------|
+| `INITIALIZING` | 刚创建 |
+| `INPUTS_IN_PROGRESS` | 已有 Assessment 定稿 |
+| `OUTLINE_LOCKED` | 大纲已锁定 |
+| `LITERATURE_READY` | 已有文献镜像 |
+| `FETCHING_PAPERS` / `DRAFTING` | Agent 运行中（瞬时） |
+| `HAS_DRAFT` | 已有草稿版本（可再跑 Agent / 继续改） |
+
+旧值 `COMPLETED` 在展示时视为 `HAS_DRAFT`。Agent / Word 导入成功后写入库内 `HAS_DRAFT`。
 
 **Agent 取数**：A/C/D 读本表定稿列；B 查 `project_source_documents` 中 `role=BACKGROUND`。
 

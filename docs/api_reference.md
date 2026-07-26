@@ -1,6 +1,6 @@
 # API Reference
 
-**版本：1.1.2**（2026-07-26）
+**版本：1.2.0**（2026-07-26）
 
 Base URL（开发）：`http://localhost:1976`  
 API 前缀：`/api`  
@@ -29,9 +29,9 @@ API 前缀：`/api`
 | GET | `/api/projects` | 是 | 当前用户项目列表（含文献数、源文档数、大纲/评估就绪标记） |
 | POST | `/api/projects` | 是 | 创建项目。Body: `{ title, zotero_collection_id? }` |
 | GET | `/api/projects/{project_id}` | 是 | 项目详情（含 `assessment_summary` / `paper_outline` / `specific_requirements`） |
-| PATCH | `/api/projects/{project_id}` | 是 | 更新标题 / status / zotero / 定稿字段（`assessment_summary` / `paper_outline` / `specific_requirements`） |
-| DELETE | `/api/projects/{project_id}` | 是 | 删除项目（级联子表） |
-| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**；运行前 **从 Zotero 拉取**，无文献则 **400**。Body: `{ max_papers?, skip_search? }` → `DraftVersion` |
+| PATCH | `/api/projects/{project_id}` | 是 | 更新标题 / zotero / 定稿字段等 |
+| DELETE | `/api/projects/{project_id}` | 是 | 删除项目（级联本地 sources / literatures / drafts；不删 Zotero 远端） |
+| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**；运行前 **从 Zotero 拉取**，无文献则 **400**。有 Key 时 Writer 分节 LLM（`OPENAI_WRITER_MODEL`）+ 约束校验；否则模板。成功后进度为 `HAS_DRAFT`（非「作业完成」）。Body: `{ max_papers?, skip_search? }` → `DraftVersion` |
 
 ## Sources — `/api/projects/{project_id}/sources`
 
@@ -71,7 +71,8 @@ API 前缀：`/api`
 
 | Method | Path | Auth | 说明 |
 |--------|------|------|------|
-| GET | `/api/literature-providers` | 是 | 全局检索库注册表（IEEE/ACM 入口来自 `.env`；二者均 `implemented`） |
+| POST | `/api/projects/{id}/literature-search/suggest-query` | 是 | Z5 按章造词：Body `{ outline_heading }` → `{ query, mode: llm\|fallback, openai_configured }` |
+| GET | `/api/literature-providers` | 是 | 全局检索库注册表；另含 `openai_configured` |
 | POST | `/api/projects/{id}/literature-search/ping` | 是 | 按项目启用库探测连通（AUT + CDP/Chrome） |
 | POST | `/api/projects/{id}/literature-search` | 是 | Body: `{ outline_heading, query?, max_results?, databases? }`；**每个库各取** `max_results`，再 DOI/标题去重；query 空则用 `LITERATURE_TEST_QUERY` → run+candidates（内存）。候选含 `already_exists`；响应可含 `deduped_count` / `partial_errors` |
 | GET | `/api/projects/{id}/literature-search/{run_id}` | 是 | 取回候选（进程重启后失效） |

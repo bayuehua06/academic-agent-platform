@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import shutil
-import tempfile
 from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
 
 from app.core.config import get_settings
+from app.services.apa_docx import build_apa_reference_docx, markdown_to_apa_docx
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -24,10 +24,20 @@ class PandocService:
         self,
         export_dir: Optional[str] = None,
         apa_csl_path: Optional[str] = None,
+        apa_reference_docx: Optional[str] = None,
     ) -> None:
         self.export_dir = Path(export_dir or settings.export_dir)
         self.apa_csl_path = Path(apa_csl_path or settings.apa_csl_path)
+        self.apa_reference_docx = Path(
+            apa_reference_docx or getattr(settings, "apa_reference_docx", "./resources/apa_reference.docx")
+        )
         self.export_dir.mkdir(parents=True, exist_ok=True)
+
+    def _ensure_reference_docx(self) -> Path:
+        """确保 APA reference.docx 存在（供 pandoc 使用）。"""
+        if not self.apa_reference_docx.exists():
+            build_apa_reference_docx(self.apa_reference_docx)
+        return self.apa_reference_docx
 
     def markdown_to_document(
         self,
@@ -35,27 +45,33 @@ class PandocService:
         apa_references_block: Optional[str] = None,
         fmt: ExportFormat = "docx",
         filename_stem: Optional[str] = None,
+        *,
+        prefer_apa_python: bool = True,
     ) -> Path:
         """
         将 Markdown 正文 + APA References 导出为 docx 或 pdf。
 
-        若系统已安装 pandoc 且存在 apa.csl，则注入 CSL 样式。
+        docx 默认走 python-docx APA 版式（不依赖本机 pandoc）；
+        若 prefer_apa_python=False 且已安装 pandoc，则用 pandoc + reference-doc。
         """
-        full_md = content_markdown.strip()
-        if apa_references_block:
-            full_md = f"{full_md}\n\n## References\n\n{apa_references_block.strip()}\n"
+        full_md = merge_content_with_apa_references(content_markdown, apa_references_block)
 
         stem = filename_stem or f"draft_{uuid4().hex[:8]}"
         output_path = self.export_dir / f"{stem}.{fmt}"
 
-        # 优先使用 pypandoc
+        if fmt == "docx" and prefer_apa_python:
+            return markdown_to_apa_docx(full_md, output_path)
+
         if shutil.which("pandoc"):
             try:
                 import pypandoc
 
                 extra_args = ["--standalone"]
-                if self.apa_csl_path.exists() and fmt == "docx":
-                    extra_args.extend(["--csl", str(self.apa_csl_path)])
+                if fmt == "docx":
+                    ref = self._ensure_reference_docx()
+                    extra_args.extend(["--reference-doc", str(ref)])
+                    if self.apa_csl_path.exists():
+                        extra_args.extend(["--csl", str(self.apa_csl_path)])
 
                 pypandoc.convert_text(
                     full_md,
@@ -66,32 +82,12 @@ class PandocService:
                 )
                 return output_path
             except Exception as exc:  # noqa: BLE001
-                logger.warning("pypandoc 转换失败，回退 python-docx: %s", exc)
+                logger.warning("pypandoc 转换失败，回退 APA python-docx: %s", exc)
 
         if fmt == "pdf":
             raise RuntimeError("PDF 导出需要系统安装 pandoc（及可选 pdflatex/weasyprint）")
 
-        return self._fallback_docx(full_md, output_path)
-
-    def _fallback_docx(self, markdown_text: str, output_path: Path) -> Path:
-        """无 pandoc 时使用 python-docx 做简易导出。"""
-        from docx import Document
-
-        doc = Document()
-        for line in markdown_text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("# "):
-                doc.add_heading(stripped[2:], level=1)
-            elif stripped.startswith("## "):
-                doc.add_heading(stripped[3:], level=2)
-            elif stripped.startswith("### "):
-                doc.add_heading(stripped[4:], level=3)
-            else:
-                doc.add_paragraph(stripped)
-        doc.save(str(output_path))
-        return output_path
+        return markdown_to_apa_docx(full_md, output_path)
 
     def docx_to_markdown(self, docx_path: Path) -> str:
         """将 Word 文档转为 Markdown。"""
@@ -112,7 +108,6 @@ class PandocService:
         doc = Document(str(docx_path))
         lines: list[str] = []
 
-        # 段落（含 Heading 样式）
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
@@ -128,7 +123,6 @@ class PandocService:
             else:
                 lines.append(text)
 
-        # 表格：评分 rubric 等常把正文全部放在表内
         for table_idx, table in enumerate(doc.tables):
             if table_idx > 0 or lines:
                 lines.append("")
@@ -140,7 +134,6 @@ class PandocService:
                         p.text.strip() for p in cell.paragraphs if p.text and p.text.strip()
                     )
                     cells.append(cell_text.replace("|", "\\|") if cell_text else "")
-                # 跳过整行空白
                 if not any(cells):
                     continue
                 lines.append("| " + " | ".join(cells) + " |")
@@ -154,6 +147,46 @@ class PandocService:
         path = upload_root / f"{uuid4().hex}{suffix}"
         path.write_bytes(content)
         return path
+
+
+def re_has_references_heading(markdown: str) -> bool:
+    """正文是否已含 References 标题。"""
+    import re
+
+    return bool(
+        re.search(r"(?im)^#{1,3}\s+references?\s*$", markdown)
+        or re.search(r"(?im)^#{1,3}\s+参考文献\s*$", markdown)
+    )
+
+
+def strip_references_section(markdown: str) -> str:
+    """
+    去掉正文末尾（或中部起）的 References / 参考文献章节。
+
+    Writer 常在 token 截断时留下半截 References；导出应以 apa_references_block 为准。
+    """
+    import re
+
+    text = (markdown or "").rstrip()
+    if not text:
+        return ""
+    match = re.search(r"(?im)^#{1,3}\s+(references?|参考文献)\s*$", text)
+    if not match:
+        return text
+    return text[: match.start()].rstrip()
+
+
+def merge_content_with_apa_references(
+    content_markdown: str,
+    apa_references_block: Optional[str],
+) -> str:
+    """合并正文与权威 References；有 block 时总是替换正文里的 References 段。"""
+    body = strip_references_section(content_markdown).strip()
+    refs = (apa_references_block or "").strip()
+    if refs:
+        return f"{body}\n\n## References\n\n{refs}\n" if body else f"## References\n\n{refs}\n"
+    # 无权威 block 时保留原文（含可能不完整的 References）
+    return (content_markdown or "").strip() + ("\n" if content_markdown else "")
 
 
 pandoc_service = PandocService()

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   deleteSource,
   lockOutline,
@@ -52,35 +52,130 @@ const ROLE_META: Record<
   },
 };
 
-function previewText(doc: SourceDocument, max = 160): string {
-  const text = (doc.summary_text || doc.raw_text || "").trim();
-  if (!text) return "（无内容）";
+/** 列表卡片预览字数（完整内容点「查看全部」） */
+const PREVIEW_CHARS = 160;
+const KEY_POINTS_PREVIEW = 80;
+
+type FullViewState = {
+  title: string;
+  body: string;
+  meta?: string;
+};
+
+function fullDocText(doc: SourceDocument): string {
+  return (doc.summary_text || doc.raw_text || "").trim() || "（无内容）";
+}
+
+function previewText(doc: SourceDocument, max = PREVIEW_CHARS): string {
+  const text = fullDocText(doc);
+  if (text === "（无内容）") return text;
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function OutlineTree({ items }: { items: OutlineItem[] }) {
+function FullTextModal({
+  view,
+  onClose,
+}: {
+  view: FullViewState;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="full-text-title"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg border border-stone-200 bg-white shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-stone-100 px-4 py-3">
+          <div className="min-w-0">
+            <h3 id="full-text-title" className="font-display text-base font-semibold text-ink">
+              {view.title}
+            </h3>
+            {view.meta ? (
+              <p className="mt-0.5 text-xs text-stone-500">{view.meta}</p>
+            ) : null}
+          </div>
+          <button type="button" className="btn-outline shrink-0 text-xs" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        <pre className="flex-1 overflow-y-auto whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed text-stone-700">
+          {view.body}
+        </pre>
+        <div className="border-t border-stone-100 px-4 py-2 text-xs text-stone-400">
+          共 {view.body.length.toLocaleString()} 字符 · Esc 关闭
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OutlineTree({
+  items,
+  onOpenFull,
+}: {
+  items: OutlineItem[];
+  onOpenFull?: () => void;
+}) {
   if (!items.length) {
     return <p className="text-xs text-stone-400">尚无标题结构</p>;
   }
   return (
-    <ul className="space-y-1 text-sm">
-      {items.map((item, idx) => (
-        <li
-          key={`${item.heading}-${idx}`}
-          style={{ paddingLeft: `${Math.max(0, (item.level || 1) - 1) * 12}px` }}
-          className="text-stone-700"
-        >
-          <span className="font-medium">{item.heading}</span>
-          {item.key_points ? (
-            <span className="ml-2 text-xs text-stone-400">
-              {item.key_points.slice(0, 80)}
-              {item.key_points.length > 80 ? "…" : ""}
-            </span>
-          ) : null}
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-2">
+      <ul className="space-y-1 text-sm">
+        {items.map((item, idx) => (
+          <li
+            key={`${item.heading}-${idx}`}
+            style={{ paddingLeft: `${Math.max(0, (item.level || 1) - 1) * 12}px` }}
+            className="text-stone-700"
+          >
+            <span className="font-medium">{item.heading}</span>
+            {item.key_points ? (
+              <span className="ml-2 text-xs text-stone-400">
+                {item.key_points.slice(0, KEY_POINTS_PREVIEW)}
+                {item.key_points.length > KEY_POINTS_PREVIEW ? "…" : ""}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {onOpenFull ? (
+        <button type="button" className="btn-outline text-xs" onClick={onOpenFull}>
+          查看全部大纲
+        </button>
+      ) : null}
+    </div>
   );
+}
+
+function formatOutlineFull(items: OutlineItem[]): string {
+  if (!items.length) return "（尚无标题结构）";
+  return items
+    .map((item) => {
+      const level = Math.max(1, Math.min(Number(item.level) || 1, 6));
+      const head = `${"#".repeat(level)} ${item.heading || ""}`.trim();
+      const points = (item.key_points || "").trim();
+      return points ? `${head}\n${points}` : head;
+    })
+    .join("\n\n");
 }
 
 export function ProjectInputs({
@@ -100,6 +195,7 @@ export function ProjectInputs({
     SPECIFIC: "",
   });
   const [notebookUrl, setNotebookUrl] = useState("");
+  const [fullView, setFullView] = useState<FullViewState | null>(null);
 
   const byRole = useMemo(() => {
     const map: Record<SourceRole, SourceDocument[]> = {
@@ -183,6 +279,15 @@ export function ProjectInputs({
     }, "NotebookLM 已同步为背景材料");
   }
 
+  function openDocFull(doc: SourceDocument) {
+    const body = fullDocText(doc);
+    setFullView({
+      title: doc.title || doc.original_filename || doc.source_type || "源文档",
+      body,
+      meta: `${doc.status}${doc.summarized_at ? ` · ${formatDate(doc.summarized_at)}` : ""} · 优先显示摘要，无摘要则原文`,
+    });
+  }
+
   function renderSourceList(role: SourceRole) {
     const docs = byRole[role];
     if (!docs.length) {
@@ -190,54 +295,72 @@ export function ProjectInputs({
     }
     return (
       <ul className="space-y-2">
-        {docs.map((doc) => (
-          <li key={doc.id} className="rounded-md border border-stone-100 bg-stone-50 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-medium text-ink">
-                  {doc.title || doc.original_filename || doc.source_type}
-                </p>
-                <p className="text-xs text-stone-500">
-                  {doc.status}
-                  {doc.summarized_at ? ` · ${formatDate(doc.summarized_at)}` : ""}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {role !== "OUTLINE" && (
+        {docs.map((doc) => {
+          const full = fullDocText(doc);
+          const truncated = full.length > PREVIEW_CHARS;
+          return (
+            <li key={doc.id} className="rounded-md border border-stone-100 bg-stone-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-ink">
+                    {doc.title || doc.original_filename || doc.source_type}
+                  </p>
+                  <p className="text-xs text-stone-500">
+                    {doc.status}
+                    {doc.summarized_at ? ` · ${formatDate(doc.summarized_at)}` : ""}
+                    {` · ${full.length.toLocaleString()} 字符`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     className="btn-outline text-xs"
                     disabled={busy}
-                    onClick={() => onSummarize(doc)}
+                    onClick={() => openDocFull(doc)}
                   >
-                    重摘要
+                    查看全部
                   </button>
-                )}
-                {role === "OUTLINE" && (
+                  {role !== "OUTLINE" && (
+                    <button
+                      type="button"
+                      className="btn-outline text-xs"
+                      disabled={busy}
+                      onClick={() => onSummarize(doc)}
+                    >
+                      重摘要
+                    </button>
+                  )}
+                  {role === "OUTLINE" && (
+                    <button
+                      type="button"
+                      className="btn text-xs"
+                      disabled={busy}
+                      onClick={() => onLock(doc.id)}
+                    >
+                      锁定此大纲
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="btn text-xs"
+                    className="btn-outline text-xs text-accent"
                     disabled={busy}
-                    onClick={() => onLock(doc.id)}
+                    onClick={() => onDelete(doc)}
                   >
-                    锁定此大纲
+                    删除
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="btn-outline text-xs text-accent"
-                  disabled={busy}
-                  onClick={() => onDelete(doc)}
-                >
-                  删除
-                </button>
+                </div>
               </div>
-            </div>
-            <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap text-xs text-stone-600">
-              {previewText(doc)}
-            </pre>
-          </li>
-        ))}
+              <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap text-xs text-stone-600">
+                {previewText(doc)}
+              </pre>
+              {truncated ? (
+                <p className="mt-1 text-[11px] text-stone-400">
+                  列表仅预览前 {PREVIEW_CHARS} 字符，点「查看全部」看完整内容
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     );
   }
@@ -327,7 +450,19 @@ export function ProjectInputs({
                 锁定最新大纲
               </button>
             </div>
-            <OutlineTree items={outlinePreview} />
+            <OutlineTree
+              items={outlinePreview}
+              onOpenFull={
+                outlinePreview.length
+                  ? () =>
+                      setFullView({
+                        title: "大纲全文",
+                        body: formatOutlineFull(outlinePreview),
+                        meta: "含各节 key_points",
+                      })
+                  : undefined
+              }
+            />
             <p className="text-xs text-stone-500">
               锁定状态：{" "}
               {project.outline_ready
@@ -342,6 +477,10 @@ export function ProjectInputs({
 
   return (
     <div className="space-y-6">
+      {fullView ? (
+        <FullTextModal view={fullView} onClose={() => setFullView(null)} />
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm">
           A 定稿：{project.assessment_ready ? "就绪" : "未就绪"}
@@ -368,21 +507,77 @@ export function ProjectInputs({
         <h2 className="font-display text-lg font-semibold">定稿预览（只读）</h2>
         <div className="grid gap-4 lg:grid-cols-3">
           <div>
-            <h3 className="mb-1 text-sm font-medium text-stone-600">Assessment 摘要</h3>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-stone-600">Assessment 摘要</h3>
+              {project.assessment_summary ? (
+                <button
+                  type="button"
+                  className="btn-outline text-xs"
+                  onClick={() =>
+                    setFullView({
+                      title: "Assessment 定稿摘要",
+                      body: project.assessment_summary || "",
+                    })
+                  }
+                >
+                  查看全部
+                </button>
+              ) : null}
+            </div>
             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-stone-50 p-3 text-xs text-stone-700">
-              {project.assessment_summary || "（尚未生成）"}
+              {project.assessment_summary
+                ? project.assessment_summary.length > PREVIEW_CHARS
+                  ? `${project.assessment_summary.slice(0, PREVIEW_CHARS)}…`
+                  : project.assessment_summary
+                : "（尚未生成）"}
             </pre>
           </div>
           <div>
-            <h3 className="mb-1 text-sm font-medium text-stone-600">论文大纲</h3>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-stone-600">论文大纲</h3>
+              {(project.paper_outline || []).length ? (
+                <button
+                  type="button"
+                  className="btn-outline text-xs"
+                  onClick={() =>
+                    setFullView({
+                      title: "锁定大纲全文",
+                      body: formatOutlineFull(project.paper_outline || []),
+                    })
+                  }
+                >
+                  查看全部
+                </button>
+              ) : null}
+            </div>
             <div className="max-h-48 overflow-y-auto rounded-md bg-stone-50 p-3">
               <OutlineTree items={project.paper_outline || []} />
             </div>
           </div>
           <div>
-            <h3 className="mb-1 text-sm font-medium text-stone-600">具体要求</h3>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-stone-600">具体要求</h3>
+              {project.specific_requirements ? (
+                <button
+                  type="button"
+                  className="btn-outline text-xs"
+                  onClick={() =>
+                    setFullView({
+                      title: "具体要求定稿",
+                      body: project.specific_requirements || "",
+                    })
+                  }
+                >
+                  查看全部
+                </button>
+              ) : null}
+            </div>
             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-stone-50 p-3 text-xs text-stone-700">
-              {project.specific_requirements || "（无）"}
+              {project.specific_requirements
+                ? project.specific_requirements.length > PREVIEW_CHARS
+                  ? `${project.specific_requirements.slice(0, PREVIEW_CHARS)}…`
+                  : project.specific_requirements
+                : "（无）"}
             </pre>
           </div>
         </div>

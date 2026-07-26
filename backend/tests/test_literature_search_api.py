@@ -12,7 +12,8 @@ from tests.helpers import (
 async def test_list_literature_providers(auth_client):
     res = await auth_client.get("/api/literature-providers")
     assert res.status_code == 200
-    providers = res.json()["providers"]
+    body = res.json()
+    providers = body["providers"]
     ids = {p["id"] for p in providers}
     assert "ieee" in ids
     assert "acm" in ids
@@ -22,6 +23,7 @@ async def test_list_literature_providers(auth_client):
     assert acm["implemented"] is True
     assert "ieee-xplore" in ieee["entry_url"]
     assert "acm" in acm["entry_url"]
+    assert "openai_configured" in body
 
 
 async def test_create_project_default_databases(auth_client):

@@ -74,6 +74,25 @@ async def test_old_notebook_routes_gone(auth_client):
     assert res.status_code == 404
 
 
+async def test_project_status_derives_from_progress(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Phases"})
+    pid = create.json()["id"]
+    assert create.json()["status"] == "INITIALIZING"
+
+    await auth_client.post(
+        f"/api/projects/{pid}/sources",
+        json={"role": "ASSESSMENT", "raw_text": "Write an APA review on tutoring."},
+    )
+    mid = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert mid["status"] == "INPUTS_IN_PROGRESS"
+    assert mid["assessment_ready"] is True
+
+    await prepare_writing_inputs(auth_client, pid)
+    locked = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert locked["status"] == "OUTLINE_LOCKED"
+    assert locked["outline_ready"] is True
+
+
 async def test_run_agent_requires_assessment_and_locked_outline(auth_client):
     create = await auth_client.post("/api/projects", json={"title": "Not Ready"})
     pid = create.json()["id"]
@@ -99,7 +118,11 @@ async def test_run_agent_requires_confirmed_literature(auth_client):
     assert "文献" in detail or "Zotero" in detail or "Collection" in detail
 
 
-async def test_run_agent_creates_draft_and_literatures(auth_client):
+async def test_run_agent_creates_draft_and_literatures(auth_client, monkeypatch):
+    from app.services import summarizer as summarizer_module
+
+    # 避免本机 .env 有 Key 时真实调用 OpenAI
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
     create = await auth_client.post("/api/projects", json={"title": "Agent Run"})
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
@@ -116,9 +139,11 @@ async def test_run_agent_creates_draft_and_literatures(auth_client):
     assert draft["source_type"] == "AGENT_GEN"
     assert draft["content_markdown"]
     assert draft["apa_references_block"]
+    assert "writer=template" in (draft.get("changelog") or "")
 
     project = (await auth_client.get(f"/api/projects/{pid}")).json()
-    assert project["status"] == "COMPLETED"
+    assert project["status"] == "HAS_DRAFT"
+
     assert project["literature_count"] == 3
     assert project["latest_version"] == 1
     assert project["assessment_ready"] is True

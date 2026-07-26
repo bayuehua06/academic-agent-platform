@@ -10,6 +10,7 @@ import { VersionHistory } from "@/components/VersionHistory";
 import {
   apiFetch,
   downloadExport,
+  buildExportFilename,
   DraftVersion,
   listSources,
   Literature,
@@ -34,6 +35,8 @@ export default function ProjectDetailPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
 
   const loadAll = useCallback(async () => {
     const [p, srcs, lits, vers] = await Promise.all([
@@ -61,6 +64,47 @@ export default function ProjectDetailPage() {
     }
     loadAll().catch((err) => setError(err.message));
   }, [loadAll, router]);
+
+  async function saveTitle() {
+    const next = titleDraft.trim();
+    if (!next || !project) return;
+    if (next === project.title) {
+      setEditingTitle(false);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await apiFetch<Project>(`/projects/${projectId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: next }),
+      });
+      setProject(updated);
+      setEditingTitle(false);
+      setMessage("已更新项目标题");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "改名失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteProject() {
+    if (!project) return;
+    const ok = window.confirm(
+      `确定删除项目「${project.title}」？本地文献镜像与草稿将一并删除（Zotero 远端集合不会自动删）。`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${projectId}`, { method: "DELETE" });
+      router.replace("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除失败");
+      setBusy(false);
+    }
+  }
 
   async function runAgent() {
     if (!project?.assessment_ready) {
@@ -161,12 +205,59 @@ export default function ProjectDetailPage() {
             <Link href="/dashboard" className="text-xs text-brand-600 underline">
               ← 返回看板
             </Link>
-            <h1 className="font-display text-2xl font-bold text-brand-700">{project.title}</h1>
+            {editingTitle ? (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <input
+                  className="input max-w-md"
+                  value={titleDraft}
+                  disabled={busy}
+                  autoFocus
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveTitle();
+                    if (e.key === "Escape") setEditingTitle(false);
+                  }}
+                />
+                <button type="button" className="btn text-sm" disabled={busy} onClick={() => void saveTitle()}>
+                  保存
+                </button>
+                <button
+                  type="button"
+                  className="btn-outline text-sm"
+                  disabled={busy}
+                  onClick={() => setEditingTitle(false)}
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <h1 className="font-display text-2xl font-bold text-brand-700">{project.title}</h1>
+                <button
+                  type="button"
+                  className="btn-outline text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    setTitleDraft(project.title);
+                    setEditingTitle(true);
+                  }}
+                >
+                  改名
+                </button>
+                <button
+                  type="button"
+                  className="btn-outline text-xs text-red-700 hover:border-red-400"
+                  disabled={busy}
+                  onClick={() => void deleteProject()}
+                >
+                  删除
+                </button>
+              </div>
+            )}
             <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${statusColor(project.status)}`}>
               {STATUS_LABELS[project.status] || project.status}
             </span>
-          </div>
-          <div className="flex flex-col items-end gap-1">
+          </div>          <div className="flex flex-col items-end gap-1">
             <button
               type="button"
               className="btn"
@@ -251,7 +342,14 @@ export default function ProjectDetailPage() {
                   type="button"
                   className="btn-outline w-full text-xs"
                   disabled={!selectedDraft || busy}
-                  onClick={() => downloadExport(projectId, "docx")}
+                  onClick={() =>
+                    downloadExport(
+                      projectId,
+                      "docx",
+                      buildExportFilename(project?.title, selectedDraft?.version_number, "docx"),
+                      selectedDraft?.id,
+                    ).catch((e) => setError(e.message))
+                  }
                 >
                   下载 DOCX
                 </button>
@@ -259,7 +357,14 @@ export default function ProjectDetailPage() {
                   type="button"
                   className="btn-outline w-full text-xs"
                   disabled={!selectedDraft || busy}
-                  onClick={() => downloadExport(projectId, "pdf").catch((e) => setError(e.message))}
+                  onClick={() =>
+                    downloadExport(
+                      projectId,
+                      "pdf",
+                      buildExportFilename(project?.title, selectedDraft?.version_number, "pdf"),
+                      selectedDraft?.id,
+                    ).catch((e) => setError(e.message))
+                  }
                 >
                   下载 PDF
                 </button>

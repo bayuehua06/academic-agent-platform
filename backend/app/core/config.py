@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Writer 长文专用；空则回退 openai_model
+    openai_writer_model: str = "gpt-4o"
 
     chrome_user_data_dir: str = ""
     chrome_profile_directory: str = "Default"
@@ -58,6 +60,8 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     export_dir: str = "./exports"
     apa_csl_path: str = "./resources/apa.csl"
+    # pandoc --reference-doc；缺失时由 apa_docx.build_apa_reference_docx 生成
+    apa_reference_docx: str = "./resources/apa_reference.docx"
 
 
 @lru_cache

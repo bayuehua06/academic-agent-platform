@@ -254,10 +254,45 @@ export function exportUrl(projectId: string, format: "docx" | "pdf") {
   return `${API_URL}/drafts/${projectId}/export?format=${format}&token=${token || ""}`;
 }
 
-/** 带鉴权下载文件 */
-export async function downloadExport(projectId: string, format: "docx" | "pdf") {
+function filenameFromContentDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      return star[1].trim();
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i.exec(header);
+  const name = (plain?.[1] || plain?.[2] || "").trim();
+  return name || fallback;
+}
+
+/** 本地拼下载名：项目名_v版本.ext（与后端 sanitize 规则对齐） */
+export function buildExportFilename(
+  title: string | undefined | null,
+  versionNumber: number | undefined | null,
+  format: "docx" | "pdf",
+): string {
+  let cleaned = (title || "draft").trim() || "draft";
+  cleaned = cleaned.replace(/[\\/:*?"<>|\r\n\t]+/g, "_").replace(/\s+/g, "_").replace(/_+/g, "_");
+  cleaned = cleaned.replace(/^[._]+|[._]+$/g, "").slice(0, 80) || "draft";
+  const ver = versionNumber && versionNumber > 0 ? versionNumber : 1;
+  return `${cleaned}_v${ver}.${format}`;
+}
+
+/** 带鉴权下载文件（文件名：响应头优先，否则用 suggestedFilename） */
+export async function downloadExport(
+  projectId: string,
+  format: "docx" | "pdf",
+  suggestedFilename?: string,
+  versionId?: string,
+) {
   const token = getToken();
-  const res = await fetch(`${API_URL}/drafts/${projectId}/export?format=${format}`, {
+  const qs = new URLSearchParams({ format });
+  if (versionId) qs.set("version_id", versionId);
+  const res = await fetch(`${API_URL}/drafts/${projectId}/export?${qs}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error("导出失败");
@@ -265,7 +300,10 @@ export async function downloadExport(projectId: string, format: "docx" | "pdf") 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `draft.${format}`;
+  a.download = filenameFromContentDisposition(
+    res.headers.get("Content-Disposition"),
+    suggestedFilename || `draft.${format}`,
+  );
   a.click();
   URL.revokeObjectURL(url);
 }

@@ -48,6 +48,33 @@ async def _get_user_project(
     return project
 
 
+def _derive_project_status(
+    project: Project,
+    *,
+    literature_count: int,
+    latest_version: int | None,
+) -> str:
+    """
+    对外展示的进度状态（非「作业已交完」）。
+
+    运行中保留瞬时态；其余按材料就绪度推导。旧 COMPLETED 视为已有草稿。
+    """
+    raw = (project.status or "").upper()
+    if raw in ("FETCHING_PAPERS", "DRAFTING"):
+        return raw
+    if latest_version is not None or raw in ("HAS_DRAFT", "COMPLETED"):
+        if latest_version is not None:
+            return "HAS_DRAFT"
+        # 库里曾标 COMPLETED 但草稿被删：继续往下推
+    if literature_count > 0:
+        return "LITERATURE_READY"
+    if project.paper_outline and project.outline_locked_at:
+        return "OUTLINE_LOCKED"
+    if project.assessment_summary:
+        return "INPUTS_IN_PROGRESS"
+    return "INITIALIZING"
+
+
 def _to_project_out(project: Project) -> ProjectOut:
     """将 Project ORM 转为响应（要求 literatures / draft_versions / source_documents 已加载）。"""
     literatures = project.__dict__.get("literatures") or []
@@ -55,6 +82,7 @@ def _to_project_out(project: Project) -> ProjectOut:
     sources = project.__dict__.get("source_documents") or []
 
     latest_version = max((d.version_number for d in drafts), default=None)
+    literature_count = len(literatures)
     return ProjectOut(
         id=project.id,
         user_id=project.user_id,
@@ -65,10 +93,14 @@ def _to_project_out(project: Project) -> ProjectOut:
         specific_requirements=project.specific_requirements,
         zotero_collection_id=project.zotero_collection_id,
         literature_databases=project.literature_databases,
-        status=project.status,
+        status=_derive_project_status(
+            project,
+            literature_count=literature_count,
+            latest_version=latest_version,
+        ),
         created_at=project.created_at,
         updated_at=project.updated_at,
-        literature_count=len(literatures),
+        literature_count=literature_count,
         source_document_count=len(sources),
         latest_version=latest_version,
         outline_ready=bool(project.paper_outline and project.outline_locked_at),
@@ -207,17 +239,29 @@ async def run_agent(
     paper_outline = project.paper_outline if isinstance(project.paper_outline, list) else []
 
     # 写作前以 Zotero 项目 Collection 为真源拉取（含离线新增）
+    status_before = project.status
+    project.status = "FETCHING_PAPERS"
+    await db.flush()
+
     try:
         synced = await sync_literatures_from_zotero(project, db)
     except ValueError as exc:
+        project.status = status_before
+        await db.flush()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        project.status = status_before
+        await db.flush()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        project.status = status_before
+        await db.flush()
         raise HTTPException(status_code=502, detail=f"从 Zotero 拉取文献失败: {exc}") from exc
 
     sources_for_draft = [lit for lit in synced if lit.selected_for_draft]
     if not sources_for_draft:
+        project.status = status_before
+        await db.flush()
         raise HTTPException(
             status_code=400,
             detail=(
@@ -254,7 +298,7 @@ async def run_agent(
             existing_sources=existing_sources,
         )
     except Exception as exc:  # noqa: BLE001
-        project.status = "INITIALIZING"
+        project.status = status_before
         await db.flush()
         raise HTTPException(status_code=500, detail=f"Agent 执行失败: {exc}") from exc
 
@@ -272,10 +316,18 @@ async def run_agent(
         content_markdown=result.get("draft_markdown") or "",
         apa_references_block=result.get("apa_references"),
         source_type="AGENT_GEN",
-        changelog=f"LangGraph 生成 v{next_version}; keywords={result.get('keywords')}",
+        changelog=(
+            f"LangGraph 生成 v{next_version}; keywords={result.get('keywords')}; "
+            f"writer={result.get('writer_mode') or 'template'}; "
+            f"model={result.get('writer_model')}; "
+            f"words≈{result.get('writer_word_count')}; "
+            f"target={result.get('writer_word_target')}; "
+            f"verify_ok={((result.get('writer_verification') or {}).get('ok'))}"
+        ),
     )
     db.add(draft)
-    project.status = "COMPLETED"
+    # 有草稿 ≠ 作业完成；仅标记进度
+    project.status = "HAS_DRAFT"
     project.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(draft)

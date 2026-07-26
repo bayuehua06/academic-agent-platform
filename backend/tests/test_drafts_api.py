@@ -9,6 +9,8 @@ from tests.helpers import prepare_confirmed_literatures, prepare_writing_inputs
 
 
 async def _project_with_draft(auth_client) -> tuple[str, dict]:
+    from app.services import summarizer as summarizer_module
+
     create = await auth_client.post(
         "/api/projects",
         json={"title": "Drafts"},
@@ -16,7 +18,10 @@ async def _project_with_draft(auth_client) -> tuple[str, dict]:
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
     _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=2)
-    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+    with (
+        patch.object(summarizer_module, "has_openai_key", lambda: False),
+        patch("app.services.literature_workflow.zotero_service", mock_svc),
+    ):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",
             json={"max_papers": 2, "skip_search": True},

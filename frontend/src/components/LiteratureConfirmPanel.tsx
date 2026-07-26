@@ -82,6 +82,9 @@ export function LiteratureConfirmPanel({
   const [searching, setSearching] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [providers, setProviders] = useState<LiteratureProvider[]>([]);
+  const [openaiConfigured, setOpenaiConfigured] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [autoSuggest, setAutoSuggest] = useState(false);
   const [selectedDbs, setSelectedDbs] = useState<string[]>(
     () => project.literature_databases?.length ? [...project.literature_databases] : ["ieee"],
   );
@@ -99,8 +102,13 @@ export function LiteratureConfirmPanel({
   }, [project.literature_databases]);
 
   useEffect(() => {
-    apiFetch<{ providers: LiteratureProvider[] }>("/literature-providers")
-      .then((res) => setProviders(res.providers || []))
+    apiFetch<{ providers: LiteratureProvider[]; openai_configured?: boolean }>(
+      "/literature-providers",
+    )
+      .then((res) => {
+        setProviders(res.providers || []);
+        setOpenaiConfigured(Boolean(res.openai_configured));
+      })
       .catch(() => setProviders([]));
   }, []);
 
@@ -114,6 +122,53 @@ export function LiteratureConfirmPanel({
     setSelected(new Set());
     setQuery("");
   }, [heading]);
+
+  async function suggestQuery(opts?: { silent?: boolean }) {
+    if (!heading) return;
+    const silent = Boolean(opts?.silent);
+    if (!silent) {
+      setSuggesting(true);
+      setBusy(true);
+      onError("");
+      onMessage("正在生成检索词…");
+    }
+    try {
+      const res = await apiFetch<{
+        query: string;
+        mode: string;
+        openai_configured?: boolean;
+      }>(`/projects/${projectId}/literature-search/suggest-query`, {
+        method: "POST",
+        body: JSON.stringify({ outline_heading: heading }),
+      });
+      if (res.openai_configured != null) setOpenaiConfigured(res.openai_configured);
+      setQuery(res.query || "");
+      if (!silent) {
+        onMessage(
+          res.mode === "llm"
+            ? `已生成检索词（LLM）：${res.query}`
+            : `已生成检索词（规则回退）：${res.query}`,
+        );
+      }
+    } catch (err) {
+      if (!silent) onError(err instanceof Error ? err.message : "生成检索词失败");
+    } finally {
+      if (!silent) {
+        setSuggesting(false);
+        setBusy(false);
+      }
+    }
+  }
+
+  // 可选：进章时自动填入检索词（覆盖空输入；换章后也会重新生成）
+  useEffect(() => {
+    if (!autoSuggest || !outlineReady || !heading) return;
+    const timer = window.setTimeout(() => {
+      void suggestQuery({ silent: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随章节/开关切换触发
+  }, [heading, autoSuggest, outlineReady]);
 
   function goChapter(index: number) {
     if (index < 0 || index >= chapters.length) return;
@@ -412,14 +467,41 @@ export function LiteratureConfirmPanel({
               <label className="label" htmlFor="lit-query">
                 检索词（可空 = 使用测试默认词）
               </label>
-              <input
-                id="lit-query"
-                className="input"
-                placeholder="food delivery transformation"
-                value={query}
-                disabled={busy}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  id="lit-query"
+                  className="input flex-1"
+                  placeholder="food delivery transformation"
+                  value={query}
+                  disabled={busy}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn-outline shrink-0 text-sm"
+                  disabled={busy || suggesting || !heading}
+                  onClick={() => void suggestQuery()}
+                  title={
+                    openaiConfigured
+                      ? "用 LLM 根据本章要点生成英文检索词"
+                      : "未配置 Key 时使用规则回退词"
+                  }
+                >
+                  {suggesting ? "生成中…" : "生成本章检索词"}
+                </button>
+              </div>
+              <label className="mt-2 inline-flex items-center gap-2 text-xs text-stone-500">
+                <input
+                  type="checkbox"
+                  checked={autoSuggest}
+                  disabled={busy}
+                  onChange={(e) => setAutoSuggest(e.target.checked)}
+                />
+                进章时自动生成
+                {!openaiConfigured ? (
+                  <span className="text-amber-700">· 当前无 OpenAI Key，将用规则词</span>
+                ) : null}
+              </label>
             </div>
             <div className="sm:col-span-2">
               <p className="label">检索库</p>

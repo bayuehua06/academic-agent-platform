@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 from uuid import UUID
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -14,6 +15,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.db.models import DraftVersion, Project, User
 from app.models.schemas import DraftVersionOut
+from app.services.apa_docx import sanitize_export_stem
 from app.services.pandoc_service import pandoc_service
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
@@ -62,6 +64,11 @@ async def import_docx(
         changelog=f"从 Word 导入: {file.filename}",
     )
     db.add(draft)
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = project_result.scalar_one()
+    project.status = "HAS_DRAFT"
     await db.flush()
     await db.refresh(draft)
     return draft
@@ -112,7 +119,7 @@ async def export_draft(
     db: AsyncSession = Depends(get_db),
 ):
     """导出草稿为 Word 或 PDF。"""
-    await _assert_project_owner(project_id, current_user, db)
+    project = await _assert_project_owner(project_id, current_user, db)
     if version_id:
         result = await db.execute(
             select(DraftVersion).where(
@@ -130,12 +137,14 @@ async def export_draft(
     if not draft:
         raise HTTPException(status_code=404, detail="草稿不存在")
 
+    stem = sanitize_export_stem(project.title, draft.version_number)
+
     try:
         path = pandoc_service.markdown_to_document(
             draft.content_markdown,
             draft.apa_references_block,
             fmt=format,  # type: ignore[arg-type]
-            filename_stem=f"project_{project_id}_v{draft.version_number}",
+            filename_stem=stem,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -145,4 +154,15 @@ async def export_draft(
         if format == "docx"
         else "application/pdf"
     )
-    return FileResponse(path, media_type=media, filename=path.name)
+    download_name = path.name
+    # 同时提供 filename 与 filename*，并配合 CORS expose_headers
+    content_disposition = (
+        f'attachment; filename="{download_name}"; '
+        f"filename*=UTF-8''{quote(download_name)}"
+    )
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=download_name,
+        headers={"Content-Disposition": content_disposition},
+    )

@@ -46,6 +46,12 @@ class AcademicAgentState(TypedDict, total=False):
     sources: List[LiteratureSource]
     draft_markdown: str
     apa_references: str
+    writer_mode: str  # llm | template
+    writer_model: Optional[str]
+    writer_word_count: int
+    writer_word_target: Dict[str, int]
+    writer_constraints: Dict[str, Any]
+    writer_verification: Dict[str, Any]
     max_papers: int
     skip_search: bool
     zotero_collection_id: Optional[str]
