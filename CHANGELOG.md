@@ -2,6 +2,33 @@
 
 本文件记录 Academic Agent Platform 的版本与功能变更摘要（功能 / API / 组件 / 数据库）。详细实现见 `docs/`。
 
+## [1.2.1] - 2026-07-26
+
+### 新增 / 变更
+
+- **导出文件名**：Word/PDF 下载名为 `{项目名}_v{版本}`；CORS 暴露 `Content-Disposition`；前端以项目标题兜底
+- **APA Word 版式**：默认 python-docx 导出（TNR 12、双倍行距、1″ 边距、标题层级、正文首行缩进、References 悬挂缩进）；备 `apa_reference.docx` 供 pandoc
+- **References 截断修复**：有 `apa_references_block` 时去掉正文半截 References，再整段替换权威列表
+- **Draft 工具栏**：下载 Word / PDF / 导入 Word 移至页顶同一行（图标按钮）
+
+### API
+
+- `GET .../drafts/{id}/export`：`Content-Disposition` 使用项目名+版本；可选 `version_id`；CORS `expose_headers` 含该头
+
+### 组件 / 服务
+
+- `apa_docx.py`、`pandoc_service.merge_content_with_apa_references`
+- 项目页 Draft 顶栏操作区
+
+### 文档
+
+- 更新 README、`api_reference`、`database_schema`、`implementation_status`
+
+### 已知限制（本版本）
+
+- PDF 导出仍依赖系统 pandoc
+- 用户上传版本后的润色流程尚未立项（校验 / 按节润色待讨论）
+
 ## [1.2.0] - 2026-07-26
 
 ### 新增 / 变更

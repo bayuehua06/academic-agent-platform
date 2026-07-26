@@ -1,6 +1,6 @@
 # Implementation Status
 
-最后更新：2026-07-26 · **版本 1.2.0**
+最后更新：2026-07-26 · **版本 1.2.1**
 
 ## 总览
 
@@ -19,7 +19,8 @@
 | Writer LLM 长文 | ✅ 完成 | 1.2.0：约束抽取 + 分节/扩写/校验；默认英文 |
 | Agent 按大纲写作 | ✅ 完成 | LLM 或模板；文献来自 Zotero sync |
 | NotebookLM 抓取 | ✅ 完成 | |
-| Pandoc 导出 / Word 导入 | ✅ / ⚠️ PDF 依赖系统 pandoc | |
+| Pandoc 导出 / Word 导入 | ✅ / ⚠️ PDF 依赖系统 pandoc | 1.2.1：APA docx 版式；文件名项目名_v版本；References 权威块替换 |
+| Draft 顶栏下载/导入 | ✅ 完成 | 1.2.1 |
 | API 自动化测试 | ✅ 完成 | pytest |
 | Alembic 迁移 | ⏳ 占位 | 现用 `create_all` + 硬切加列 |
 
@@ -30,7 +31,7 @@
 | ProjectInputs | ✅ A/B/C/D；预览 / 全文 |
 | LiteratureConfirmPanel | ✅ 按章向导 / IEEE·ACM 勾选 / Z5 造词 / 确认 / 同步 |
 | ZoteroList | ✅ 已确认库 |
-| DraftViewer / VersionHistory | ✅ |
+| DraftViewer / VersionHistory | ✅ 顶栏 Word/PDF/导入 |
 | 登录 / 注册 / Dashboard | ✅ 改名 / 删除 / 进度标签 |
 
 ## LangGraph 节点
@@ -50,6 +51,6 @@
 
 ## 下一步建议
 
-1. 候选相关性 LLM 打分（可选，未立项）。  
-2. Alembic。  
-3. Writer 分章流式输出 / 前端进度展示。
+1. 用户上传版本后：约束校验 + 按节润色（未立项）。  
+2. 候选相关性 LLM 打分（可选）。  
+3. Alembic；Writer 分章流式 / 前端进度。

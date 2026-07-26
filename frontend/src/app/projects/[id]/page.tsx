@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { Download, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { DraftViewer } from "@/components/DraftViewer";
 import { LiteratureConfirmPanel } from "@/components/LiteratureConfirmPanel";
@@ -20,6 +21,28 @@ import {
 import { STATUS_LABELS, statusColor } from "@/lib/utils";
 
 type Tab = "inputs" | "literature" | "draft";
+
+function WordBadge() {
+  return (
+    <span
+      className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-[#2B579A] px-0.5 text-[10px] font-bold leading-none text-white"
+      aria-hidden
+    >
+      W
+    </span>
+  );
+}
+
+function PdfBadge() {
+  return (
+    <span
+      className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-[#E5252A] px-0.5 text-[8px] font-bold leading-none text-white"
+      aria-hidden
+    >
+      PDF
+    </span>
+  );
+}
 
 export default function ProjectDetailPage() {
   const params = useParams();
@@ -329,60 +352,82 @@ export default function ProjectDetailPage() {
         )}
 
         {tab === "draft" && (
-          <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
-            <aside className="card">
-              <h2 className="mb-3 font-display text-base font-semibold">版本历史</h2>
-              <VersionHistory
-                versions={drafts}
-                selectedId={selectedDraft?.id}
-                onSelect={setSelectedDraft}
-              />
-              <div className="mt-4 space-y-2 border-t border-stone-100 pt-4">
-                <button
-                  type="button"
-                  className="btn-outline w-full text-xs"
-                  disabled={!selectedDraft || busy}
-                  onClick={() =>
-                    downloadExport(
-                      projectId,
-                      "docx",
-                      buildExportFilename(project?.title, selectedDraft?.version_number, "docx"),
-                      selectedDraft?.id,
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  下载 DOCX
-                </button>
-                <button
-                  type="button"
-                  className="btn-outline w-full text-xs"
-                  disabled={!selectedDraft || busy}
-                  onClick={() =>
-                    downloadExport(
-                      projectId,
-                      "pdf",
-                      buildExportFilename(project?.title, selectedDraft?.version_number, "pdf"),
-                      selectedDraft?.id,
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  下载 PDF
-                </button>
-                <label className="btn-outline w-full cursor-pointer text-xs">
-                  上传 Word 导入
-                  <input
-                    type="file"
-                    accept=".docx"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) onImportDocx(f);
-                    }}
-                  />
-                </label>
-              </div>
-            </aside>
-            <DraftViewer draft={selectedDraft} />
+          <div className="space-y-4">
+            <div className="card flex flex-wrap items-center gap-2 py-3">
+              <button
+                type="button"
+                className="btn-outline gap-1.5 px-3 py-1.5 text-xs"
+                disabled={!selectedDraft || busy}
+                title="下载 Word"
+                onClick={() =>
+                  downloadExport(
+                    projectId,
+                    "docx",
+                    buildExportFilename(project?.title, selectedDraft?.version_number, "docx"),
+                    selectedDraft?.id,
+                  ).catch((e) => setError(e.message))
+                }
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden />
+                <WordBadge />
+                <span>Word</span>
+              </button>
+              <button
+                type="button"
+                className="btn-outline gap-1.5 px-3 py-1.5 text-xs"
+                disabled={!selectedDraft || busy}
+                title="下载 PDF"
+                onClick={() =>
+                  downloadExport(
+                    projectId,
+                    "pdf",
+                    buildExportFilename(project?.title, selectedDraft?.version_number, "pdf"),
+                    selectedDraft?.id,
+                  ).catch((e) => setError(e.message))
+                }
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden />
+                <PdfBadge />
+                <span>PDF</span>
+              </button>
+              <label
+                className={`btn-outline gap-1.5 px-3 py-1.5 text-xs ${
+                  busy ? "pointer-events-none opacity-50" : "cursor-pointer"
+                }`}
+                title="上传 Word 导入为新版本"
+              >
+                <Upload className="h-3.5 w-3.5" aria-hidden />
+                <WordBadge />
+                <span>导入</span>
+                <input
+                  type="file"
+                  accept=".docx"
+                  className="hidden"
+                  disabled={busy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onImportDocx(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              {selectedDraft && (
+                <span className="ml-auto text-xs text-stone-500">
+                  当前：v{selectedDraft.version_number}
+                </span>
+              )}
+            </div>
+            <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+              <aside className="card">
+                <h2 className="mb-3 font-display text-base font-semibold">版本历史</h2>
+                <VersionHistory
+                  versions={drafts}
+                  selectedId={selectedDraft?.id}
+                  onSelect={setSelectedDraft}
+                />
+              </aside>
+              <DraftViewer draft={selectedDraft} />
+            </div>
           </div>
         )}
       </div>

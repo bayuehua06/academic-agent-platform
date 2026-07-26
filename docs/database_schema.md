@@ -5,6 +5,7 @@ ORM：SQLAlchemy Async（`backend/app/db/models.py`）。开发环境可用 `cre
 
 扩展：`pgcrypto`（`gen_random_uuid`，见 `backend/app/db/init.sql`）。
 
+> **2026-07-26 / v1.2.1**：无新表；导出文件名与 APA docx 为服务/前端能力。  
 > **2026-07-26 / v1.2.0**：无新表；项目 `status` API 按就绪度推导（见下）；Writer/Z5 为服务层能力。  
 > **2026-07-26 / v1.1.0**：删除 `notebooklm_inputs`；新增 `project_source_documents`；`projects` 增加定稿缓存字段。  
 > **2026-07-26 / v1.1.2**：检索库字段不变；IEEE+ACM 均已实现，项目 `literature_databases` 由 UI 勾选驱动。  

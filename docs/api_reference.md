@@ -1,6 +1,6 @@
 # API Reference
 
-**版本：1.2.0**（2026-07-26）
+**版本：1.2.1**（2026-07-26）
 
 Base URL（开发）：`http://localhost:1976`  
 API 前缀：`/api`  
@@ -87,7 +87,7 @@ API 前缀：`/api`
 | POST | `/api/drafts/import-docx?project_id=` | 是 | multipart 上传 `.docx` → 新版本（`MANUAL_IMPORT`） |
 | GET | `/api/drafts/{project_id}` | 是 | 版本列表（新→旧） |
 | GET | `/api/drafts/{project_id}/latest` | 是 | 最新版本 |
-| GET | `/api/drafts/{project_id}/export?format=docx\|pdf` | 是 | 导出文件流；可选 `version_id` |
+| GET | `/api/drafts/{project_id}/export?format=docx\|pdf` | 是 | 导出文件流；可选 `version_id`。下载名 `{项目名}_v{版本}`；有权威 References 时替换正文半截列表。CORS 暴露 `Content-Disposition` |
 
 ## 状态码约定
 

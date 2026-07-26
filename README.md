@@ -1,6 +1,6 @@
 # Academic Agent Platform
 
-**版本：1.2.0**
+**版本：1.2.1**
 
 学术辅助平台：多源输入（Assessment / 背景 / 大纲 / 具体要求）→ Summarizer 定稿 → **按章 IEEE/ACM 检索（可 LLM 造词）并确认入 Zotero** → LangGraph 按锁定大纲生成 APA 7th 草稿（有 Key 时 LLM 分节写作）；可选 NotebookLM 抓取；支持版本控制与 Word/PDF 导出导入。
 
@@ -78,7 +78,7 @@ CHROME_CDP_URL=http://127.0.0.1:9222
 4. **文献检索 + Zotero** — AUT→IEEE/ACM、多库去重、Z5 造词、按章向导、确认入库、Collection 真源同步  
 5. **APA 草稿（LLM）** — 约束抽取 + 分节写作 / 扩写 / 校验；默认学术英文；无 Key 回退模板  
 6. **项目管理 UX** — 改名 / 删除；进度按就绪度推导（非「作业完成」）  
-7. **版本控制** — Draft 历史、Word/PDF 导出、Word 逆向导入  
+7. **版本控制** — Draft 历史；顶栏下载 Word/PDF（APA 版式、`项目名_v版本`）与 Word 导入  
 
 ## 目录结构
 

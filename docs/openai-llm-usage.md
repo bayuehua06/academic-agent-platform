@@ -1,6 +1,6 @@
 # OpenAI / LLM 使用说明（统一）
 
-> 版本对齐：**v1.2.0**（Z5 / Writer LLM / 默认英文）· 更新日期：2026-07-26  
+> 版本对齐：**v1.2.1**（含 1.2.0 Z5 / Writer；导出 APA 见 CHANGELOG）· 更新日期：2026-07-26
 > 配置：`backend/.env` → `OPENAI_API_KEY`、`OPENAI_MODEL`（默认 `gpt-4o-mini`）、`OPENAI_WRITER_MODEL`（默认 `gpt-4o`）  
 > Key **本身免费**；调用按量从 Platform 余额扣费。与 ChatGPT Plus **不是同一套计费**。
 
