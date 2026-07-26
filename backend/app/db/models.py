@@ -63,6 +63,8 @@ class Project(Base):
     )
     specific_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     zotero_collection_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # 本项目启用的检索库 id 列表，如 ["ieee","acm"]；空则用全局默认
+    literature_databases: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="INITIALIZING")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -132,6 +134,9 @@ class Literature(Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     zotero_item_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    zotero_subcollection_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    outline_heading: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    source_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     authors: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     year: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
@@ -139,6 +144,9 @@ class Literature(Base):
     abstract: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     selected_for_draft: Mapped[bool] = mapped_column(Boolean, default=True)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

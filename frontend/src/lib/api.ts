@@ -9,6 +9,7 @@ export type Project = {
   outline_locked_at?: string | null;
   specific_requirements?: string | null;
   zotero_collection_id?: string | null;
+  literature_databases?: string[] | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -51,6 +52,9 @@ export type Literature = {
   id: string;
   project_id: string;
   zotero_item_key?: string | null;
+  zotero_subcollection_key?: string | null;
+  outline_heading?: string | null;
+  source_query?: string | null;
   title: string;
   authors?: string[] | null;
   year?: string | null;
@@ -58,7 +62,46 @@ export type Literature = {
   abstract?: string | null;
   relevance_score?: number | null;
   selected_for_draft: boolean;
+  confirmed_at?: string | null;
   created_at: string;
+};
+
+export type LiteratureCandidate = {
+  title: string;
+  authors?: string[];
+  year?: string | null;
+  doi?: string | null;
+  abstract?: string | null;
+  url?: string | null;
+  provider?: string;
+  outline_heading?: string;
+  source_query?: string;
+  relevance_score?: number | null;
+  /** 已在本项目 Zotero Collection（任意子集合）中 */
+  already_exists?: boolean;
+  existing_outline_heading?: string | null;
+  existing_zotero_item_key?: string | null;
+};
+
+export type LiteratureProvider = {
+  id: string;
+  name: string;
+  entry_url: string;
+  implemented: boolean;
+};
+
+export type LiteratureSearchRun = {
+  id: string;
+  project_id: string;
+  outline_heading: string;
+  query: string;
+  providers: string[];
+  status: string;
+  error?: string | null;
+  candidates: LiteratureCandidate[];
+  created_at: string;
+  partial_errors?: { provider: string; error: string }[] | null;
+  deduped_count?: number | null;
 };
 
 export type DraftVersion = {
@@ -107,7 +150,10 @@ export async function apiFetch<T>(
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || JSON.stringify(body);
+      if (typeof body.detail === "string") detail = body.detail;
+      else if (body.detail?.message) detail = body.detail.message;
+      else if (body.detail) detail = JSON.stringify(body.detail);
+      else detail = JSON.stringify(body);
     } catch {
       /* ignore */
     }

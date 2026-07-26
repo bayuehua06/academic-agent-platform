@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { DraftViewer } from "@/components/DraftViewer";
+import { LiteratureConfirmPanel } from "@/components/LiteratureConfirmPanel";
 import { ProjectInputs } from "@/components/ProjectInputs";
 import { VersionHistory } from "@/components/VersionHistory";
-import { ZoteroList } from "@/components/ZoteroList";
 import {
   apiFetch,
   downloadExport,
@@ -80,7 +80,7 @@ export default function ProjectDetailPage() {
     try {
       const draft = await apiFetch<DraftVersion>(`/projects/${projectId}/run-agent`, {
         method: "POST",
-        body: JSON.stringify({ max_papers: 5, skip_search: false }),
+        body: JSON.stringify({ max_papers: 5, skip_search: true }),
       });
       setMessage(`已生成草稿 v${draft.version_number}`);
       setTab("draft");
@@ -147,7 +147,11 @@ export default function ProjectDetailPage() {
     { id: "draft", label: "Draft & Versions" },
   ];
 
-  const canRun = Boolean(project.assessment_ready && project.outline_ready);
+  const canRun = Boolean(
+    project.assessment_ready &&
+      project.outline_ready &&
+      literatures.some((l) => l.confirmed_at && l.selected_for_draft),
+  );
 
   return (
     <main className="min-h-screen">
@@ -168,12 +172,16 @@ export default function ProjectDetailPage() {
               className="btn"
               onClick={runAgent}
               disabled={busy || !canRun}
-              title={canRun ? "运行学术 Agent" : "需先完成 A 定稿并锁定 C 大纲"}
+              title={
+                canRun
+                  ? "运行学术 Agent"
+                  : "需 A 定稿 + C 锁定 + 已确认文献"
+              }
             >
               运行学术 Agent
             </button>
             {!canRun && (
-              <p className="text-xs text-stone-500">需 A 就绪 + C 已锁定</p>
+              <p className="text-xs text-stone-500">需 A + 锁定 C + 文献确认入库</p>
             )}
           </div>
         </div>
@@ -216,12 +224,17 @@ export default function ProjectDetailPage() {
         )}
 
         {tab === "literature" && (
-          <div className="card">
-            <h2 className="mb-4 font-display text-lg font-semibold">
-              文献库（Zotero 同步）
-            </h2>
-            <ZoteroList items={literatures} onToggle={toggleLit} />
-          </div>
+          <LiteratureConfirmPanel
+            projectId={projectId}
+            project={project}
+            literatures={literatures}
+            busy={busy}
+            setBusy={setBusy}
+            onMessage={setMessage}
+            onError={setError}
+            onReload={loadAll}
+            onToggleLit={toggleLit}
+          />
         )}
 
         {tab === "draft" && (

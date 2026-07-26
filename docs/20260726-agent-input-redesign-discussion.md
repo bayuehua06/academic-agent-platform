@@ -239,7 +239,8 @@ Writer / Researcher 启动时：
 > 状态约定：`待开始` → `进行中` → `已完成` / `跳过`。  
 > 原则：**先库表与 API，再 UI，再 Summarizer，最后改写作 Agent**；每步可独立验证。
 
-**总进度**：Phase 0–5 均未开始（2026-07-26）
+**总进度**（2026-07-26）：Phase 0–6 已完成并发布 **v1.1.0**。  
+说明：Phase 5 结构对齐已实现；检索仍为模拟、写作仍为模板（LLM 真写为后续增强）。
 
 ---
 
@@ -336,10 +337,12 @@ Writer / Researcher 启动时：
 
 | # | 步骤 | 状态 | 完成日期 | 验证方式 |
 |---|------|------|----------|----------|
-| 6.1 | 更新 `api_reference.md`、`implementation_status.md` | [ ] | | |
-| 6.2 | README 补充四类输入与 Summarizer 配置说明（你确认后再改） | [ ] | | |
-| 6.3 | CHANGELOG 条目（你确认后再改） | [ ] | | |
-| 6.4 | 将本文重命名归档为 `docs/YYYYMMDD-agent-input-redesign-discussion.md`（可选） | [ ] | | |
+| 6.1 | 更新 `api_reference.md`、`implementation_status.md` | [x] | 2026-07-26 | |
+| 6.2 | README 补充四类输入与 Summarizer 配置说明（你确认后再改） | [x] | 2026-07-26 | |
+| 6.3 | CHANGELOG 条目（你确认后再改） | [x] | 2026-07-26 | v1.1.0 |
+| 6.4 | 将本文重命名归档为 `docs/YYYYMMDD-agent-input-redesign-discussion.md`（可选） | [x] | 2026-07-26 | `20260726-agent-input-redesign-discussion.md` |
+
+**Phase 6 出口**：文档与版本号与实现一致。 ✅（Academic Agent Platform **1.1.0**）
 
 ---
 
@@ -407,5 +410,3 @@ SUMMARIZER_MODEL_PREMIUM=gpt-4o   # 可选
 - [x] B 由 Agent 自查 documents  
 - [x] 模型 gpt-4o-mini  
 - [x] 实现步骤清单（§6）可 track  
-
-**下一步**：从 **Phase 1** 开始实现（你说一声即开干）。

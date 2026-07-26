@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     zotero_api_key: str = ""
     zotero_library_type: str = "user"
 
+    # AUT Library 登录（本机；勿提交真实密码）
+    aut_username: str = ""
+    aut_password: str = ""
+    literature_test_query: str = "food delivery transformation"
+    # 检索库入口（AUT 代理；全局注册表）
+    literature_db_ieee_url: str = "https://library.aut.ac.nz/databases/ieee-xplore"
+    literature_db_acm_url: str = "https://library.aut.ac.nz/databases/acm-digital-library"
+    # 新建项目默认启用的库 id，逗号分隔：ieee,acm
+    literature_default_databases: str = "ieee"
+
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 

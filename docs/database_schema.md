@@ -5,7 +5,9 @@ ORM：SQLAlchemy Async（`backend/app/db/models.py`）。开发环境可用 `cre
 
 扩展：`pgcrypto`（`gen_random_uuid`，见 `backend/app/db/init.sql`）。
 
-> **2026-07-26 重构**：删除 `notebooklm_inputs`；新增 `project_source_documents`；`projects` 增加定稿缓存字段。详见 `docs/agent-input-redesign-discussion.md`。
+> **2026-07-26 / v1.1.0**：删除 `notebooklm_inputs`；新增 `project_source_documents`；`projects` 增加定稿缓存字段。  
+> **2026-07-26 / v1.1.2**：检索库字段不变；IEEE+ACM 均已实现，项目 `literature_databases` 由 UI 勾选驱动。  
+> **2026-07-26 / v1.1.1**：`projects.literature_databases`；`literatures` 增加章节/确认/子集合字段。设计归档见 `docs/20260726-literature-zotero-search-discussion.md`。
 
 ## ER 概览
 
@@ -40,6 +42,7 @@ users 1──* projects 1──* project_source_documents
 | outline_locked_at | TIMESTAMPTZ | | 大纲锁定时间 |
 | specific_requirements | TEXT | | **定稿**：D；D 变更后更新 |
 | zotero_collection_id | VARCHAR(100) | | |
+| literature_databases | JSONB | | 本项目启用的检索库 id，如 `["ieee"]` / `["ieee","acm"]`；空则用全局默认；多库时各取 N 条后去重 |
 | status | VARCHAR(50) | default `INITIALIZING` | |
 | created_at | TIMESTAMPTZ | default now() | |
 | updated_at | TIMESTAMPTZ | default now(), on update | |
@@ -83,6 +86,9 @@ users 1──* projects 1──* project_source_documents
 | id | UUID | PK | |
 | project_id | UUID | FK → projects ON DELETE CASCADE | |
 | zotero_item_key | VARCHAR(100) | | |
+| zotero_subcollection_key | VARCHAR(100) | | 所属章节子集合 |
+| outline_heading | VARCHAR(500) | | 对应锁定大纲章节 |
+| source_query | TEXT | | 检索词（审计） |
 | title | TEXT | NOT NULL | |
 | authors | JSONB | | |
 | year | VARCHAR(10) | | |
@@ -90,6 +96,7 @@ users 1──* projects 1──* project_source_documents
 | abstract | TEXT | | |
 | relevance_score | FLOAT | | |
 | selected_for_draft | BOOLEAN | default TRUE | |
+| confirmed_at | TIMESTAMPTZ | | 确认入库时间；本地镜像字段。**写作真源为 Zotero**，run-agent 前会 sync |
 | created_at | TIMESTAMPTZ | default now() | |
 
 ### draft_versions

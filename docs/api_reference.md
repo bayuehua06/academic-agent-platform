@@ -1,9 +1,12 @@
 # API Reference
 
+**版本：1.1.2**（2026-07-26）
+
 Base URL（开发）：`http://localhost:1976`  
 API 前缀：`/api`  
 鉴权：除注册/登录外，需 `Authorization: Bearer <access_token>`  
 交互文档：`http://localhost:1976/docs`
+
 
 ## Health
 
@@ -28,7 +31,7 @@ API 前缀：`/api`
 | GET | `/api/projects/{project_id}` | 是 | 项目详情（含 `assessment_summary` / `paper_outline` / `specific_requirements`） |
 | PATCH | `/api/projects/{project_id}` | 是 | 更新标题 / status / zotero / 定稿字段（`assessment_summary` / `paper_outline` / `specific_requirements`） |
 | DELETE | `/api/projects/{project_id}` | 是 | 删除项目（级联子表） |
-| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**，否则 **400**。装配 A/C/D 定稿 + B summaries；Writer 按 `paper_outline` 逐节输出。Body: `{ max_papers?, skip_search? }` → `DraftVersion` |
+| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**；运行前 **从 Zotero 拉取**，无文献则 **400**。Body: `{ max_papers?, skip_search? }` → `DraftVersion` |
 
 ## Sources — `/api/projects/{project_id}/sources`
 
@@ -53,9 +56,28 @@ API 前缀：`/api`
 
 | Method | Path | Auth | 说明 |
 |--------|------|------|------|
-| GET | `/api/zotero/status` | 是 | 是否已配置 Zotero API |
+| GET | `/api/zotero/ping` | 是 | 真实连通检测（返回 ok / library 摘要或 error） |
+| GET | `/api/zotero/collections` | 是 | 列出库内集合（调试） |
+| GET | `/api/zotero/status` | 是 | 是否已配置（不发请求） |
+| POST | `/api/zotero/projects/{project_id}/ensure-structure` | 是 | 创建/对齐项目 Collection + 章节 Subcollections（需已锁定大纲） |
+| POST | `/api/zotero/projects/{project_id}/sync` | 是 | 从 Zotero 项目集合（含章节子集合）拉取并镜像本地；**写作真源** |
+| POST | `/api/zotero/projects/{project_id}/import` | 是 | Body: `{ outline_heading, items[], source_query? }` → Zotero 子集合 + 本地镜像（`confirmed_at`） |
 | GET | `/api/zotero/projects/{project_id}/literatures` | 是 | 文献列表 |
 | PATCH | `/api/zotero/literatures/{literature_id}` | 是 | 更新 `selected_for_draft` / `relevance_score` |
+
+> `POST /api/projects/{id}/run-agent`：运行前先从 Zotero 项目 Collection 拉取并同步本地；无文献则 400。本地 `literatures` 仅为镜像/缓存。
+
+## Literature Search — `/api`
+
+| Method | Path | Auth | 说明 |
+|--------|------|------|------|
+| GET | `/api/literature-providers` | 是 | 全局检索库注册表（IEEE/ACM 入口来自 `.env`；二者均 `implemented`） |
+| POST | `/api/projects/{id}/literature-search/ping` | 是 | 按项目启用库探测连通（AUT + CDP/Chrome） |
+| POST | `/api/projects/{id}/literature-search` | 是 | Body: `{ outline_heading, query?, max_results?, databases? }`；**每个库各取** `max_results`，再 DOI/标题去重；query 空则用 `LITERATURE_TEST_QUERY` → run+candidates（内存）。候选含 `already_exists`；响应可含 `deduped_count` / `partial_errors` |
+| GET | `/api/projects/{id}/literature-search/{run_id}` | 是 | 取回候选（进程重启后失效） |
+| POST | `/api/projects/{id}/literature-search/{run_id}/confirm` | 是 | Body: `{ indices: [0,2] }` → 勾选项写入 Zotero 章节子集合 + 本地 `literatures` |
+
+项目字段 `literature_databases`：创建/更新/文献向导可勾选 `["ieee"]`、`["acm"]` 或 `["ieee","acm"]`。
 
 ## Drafts — `/api/drafts`
 

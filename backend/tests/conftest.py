@@ -15,9 +15,11 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 
 from app.api import api_router
+from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.db.models import User
+from app.services.zotero_service import zotero_service
 
 
 # ---------- SQLite 兼容 PostgreSQL 专用类型 ----------
@@ -31,6 +33,24 @@ def _compile_jsonb_sqlite(_type: Any, _compiler: Any, **_kw: Any) -> str:
 @compiles(UUID, "sqlite")
 def _compile_uuid_sqlite(_type: Any, _compiler: Any, **_kw: Any) -> str:
     return "CHAR(36)"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_external_credentials(monkeypatch: pytest.MonkeyPatch):
+    """测试不触达真实 Zotero / AUT（避免本机 .env 凭据干扰）。"""
+    for key in (
+        "ZOTERO_LIBRARY_ID",
+        "ZOTERO_API_KEY",
+        "AUT_USERNAME",
+        "AUT_PASSWORD",
+    ):
+        monkeypatch.setenv(key, "")
+    get_settings.cache_clear()
+    zotero_service.library_id = ""
+    zotero_service.api_key = ""
+    zotero_service._client = None
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture

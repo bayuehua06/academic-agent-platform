@@ -43,11 +43,13 @@ class UserOut(BaseModel):
 class ProjectCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     zotero_collection_id: Optional[str] = None
+    literature_databases: Optional[List[str]] = None
 
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
     zotero_collection_id: Optional[str] = None
+    literature_databases: Optional[List[str]] = None
     status: Optional[str] = None
     # 定稿字段：Phase 2+ 主要由 refresh 写入；允许手工微调
     assessment_summary: Optional[str] = None
@@ -66,6 +68,7 @@ class ProjectOut(BaseModel):
     outline_locked_at: Optional[datetime] = None
     specific_requirements: Optional[str] = None
     zotero_collection_id: Optional[str] = None
+    literature_databases: Optional[List[str]] = None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -133,6 +136,9 @@ class LiteratureOut(BaseModel):
     id: UUID
     project_id: UUID
     zotero_item_key: Optional[str] = None
+    zotero_subcollection_key: Optional[str] = None
+    outline_heading: Optional[str] = None
+    source_query: Optional[str] = None
     title: str
     authors: Optional[List[str]] = None
     year: Optional[str] = None
@@ -140,12 +146,32 @@ class LiteratureOut(BaseModel):
     abstract: Optional[str] = None
     relevance_score: Optional[float] = None
     selected_for_draft: bool
+    confirmed_at: Optional[datetime] = None
     created_at: datetime
 
 
 class LiteratureUpdate(BaseModel):
     selected_for_draft: Optional[bool] = None
     relevance_score: Optional[float] = None
+
+
+class LiteratureImportItem(BaseModel):
+    """确认入库的单篇文献元数据。"""
+
+    title: str
+    authors: Optional[List[str]] = None
+    year: Optional[str] = None
+    doi: Optional[str] = None
+    abstract: Optional[str] = None
+    relevance_score: Optional[float] = None
+
+
+class LiteratureImportRequest(BaseModel):
+    """将确认文献写入 Zotero 章节子集合 + 本地镜像。"""
+
+    outline_heading: str
+    items: List[LiteratureImportItem]
+    source_query: Optional[str] = None
 
 
 # ---------- Drafts ----------

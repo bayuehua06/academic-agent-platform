@@ -1,10 +1,11 @@
 """草稿版本、导出与 Word 导入 API 测试。"""
 
 from io import BytesIO
+from unittest.mock import patch
 
 from docx import Document
 
-from tests.helpers import prepare_writing_inputs
+from tests.helpers import prepare_confirmed_literatures, prepare_writing_inputs
 
 
 async def _project_with_draft(auth_client) -> tuple[str, dict]:
@@ -14,10 +15,12 @@ async def _project_with_draft(auth_client) -> tuple[str, dict]:
     )
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
-    run = await auth_client.post(
-        f"/api/projects/{pid}/run-agent",
-        json={"max_papers": 2, "skip_search": False},
-    )
+    _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=2)
+    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+        run = await auth_client.post(
+            f"/api/projects/{pid}/run-agent",
+            json={"max_papers": 2, "skip_search": True},
+        )
     assert run.status_code == 200
     return pid, run.json()
 

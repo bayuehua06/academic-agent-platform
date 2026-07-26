@@ -11,7 +11,9 @@ type Props = {
 export function ZoteroList({ items, onToggle }: Props) {
   if (!items.length) {
     return (
-      <p className="text-sm text-stone-500">暂无文献。运行 Agent 后将自动同步。</p>
+      <p className="text-sm text-stone-500">
+        暂无已确认文献。请先检索并勾选入库。
+      </p>
     );
   }
 
@@ -46,8 +48,14 @@ export function ZoteroList({ items, onToggle }: Props) {
               {lit.abstract && (
                 <p className="mt-2 text-sm text-stone-500 line-clamp-3">{lit.abstract}</p>
               )}
+              {lit.outline_heading && (
+                <span className="ml-2 rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-600">
+                  {lit.outline_heading}
+                </span>
+              )}
               <p className="mt-1 text-xs text-stone-400">
-                Zotero key: {lit.zotero_item_key || "未同步"} · {formatDate(lit.created_at)}
+                Zotero key: {lit.zotero_item_key || "未同步"}
+                {lit.confirmed_at ? " · 已确认" : ""} · {formatDate(lit.created_at)}
               </p>
             </div>
             {onToggle && (

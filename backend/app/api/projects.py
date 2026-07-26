@@ -15,7 +15,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.agents.graph import run_academic_workflow
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.db.models import DraftVersion, Literature, Project, User
+from app.db.models import DraftVersion, Project, User
 from app.models.schemas import (
     AgentRunRequest,
     DraftVersionOut,
@@ -23,6 +23,8 @@ from app.models.schemas import (
     ProjectOut,
     ProjectUpdate,
 )
+from app.services.literature_providers import default_database_ids, parse_database_ids
+from app.services.literature_workflow import sync_literatures_from_zotero
 from app.services.project_assembly import ensure_writing_ready
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -62,6 +64,7 @@ def _to_project_out(project: Project) -> ProjectOut:
         outline_locked_at=project.outline_locked_at,
         specific_requirements=project.specific_requirements,
         zotero_collection_id=project.zotero_collection_id,
+        literature_databases=project.literature_databases,
         status=project.status,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -107,10 +110,19 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
     """创建项目。"""
+    dbs = parse_database_ids(payload.literature_databases) or default_database_ids()
+    try:
+        from app.services.literature_providers import resolve_providers_for_project
+
+        resolve_providers_for_project(dbs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     project = Project(
         user_id=current_user.id,
         title=payload.title,
         zotero_collection_id=payload.zotero_collection_id,
+        literature_databases=dbs,
         status="INITIALIZING",
     )
     db.add(project)
@@ -141,6 +153,15 @@ async def update_project(
     """更新项目字段。"""
     project = await _get_user_project(project_id, current_user, db)
     data = payload.model_dump(exclude_unset=True)
+    if "literature_databases" in data:
+        dbs = parse_database_ids(data["literature_databases"]) or default_database_ids()
+        try:
+            from app.services.literature_providers import resolve_providers_for_project
+
+            resolve_providers_for_project(dbs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        data["literature_databases"] = dbs
     for key, value in data.items():
         setattr(project, key, value)
     project.updated_at = datetime.now(timezone.utc)
@@ -185,21 +206,38 @@ async def run_agent(
     ]
     paper_outline = project.paper_outline if isinstance(project.paper_outline, list) else []
 
-    existing_sources = None
-    if payload.skip_search and project.literatures:
-        existing_sources = [
-            {
-                "title": lit.title,
-                "authors": lit.authors or [],
-                "year": lit.year or "",
-                "doi": lit.doi or "",
-                "abstract": lit.abstract or "",
-                "relevance_score": lit.relevance_score or 0.0,
-                "zotero_item_key": lit.zotero_item_key,
-            }
-            for lit in project.literatures
-            if lit.selected_for_draft
-        ]
+    # 写作前以 Zotero 项目 Collection 为真源拉取（含离线新增）
+    try:
+        synced = await sync_literatures_from_zotero(project, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"从 Zotero 拉取文献失败: {exc}") from exc
+
+    sources_for_draft = [lit for lit in synced if lit.selected_for_draft]
+    if not sources_for_draft:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Zotero 项目集合中暂无文献。请先检索确认入库，"
+                "或在 Zotero 客户端向该项目 Collection/章节子集合添加条目后重试"
+            ),
+        )
+
+    existing_sources = [
+        {
+            "title": lit.title,
+            "authors": lit.authors or [],
+            "year": lit.year or "",
+            "doi": lit.doi or "",
+            "abstract": lit.abstract or "",
+            "relevance_score": lit.relevance_score or 0.0,
+            "zotero_item_key": lit.zotero_item_key,
+        }
+        for lit in sources_for_draft
+    ]
 
     try:
         project.status = "DRAFTING"
@@ -211,7 +249,7 @@ async def run_agent(
             specific_requirements=project.specific_requirements or "",
             background_summaries=background_parts,
             max_papers=payload.max_papers,
-            skip_search=payload.skip_search,
+            skip_search=True,
             zotero_collection_id=project.zotero_collection_id,
             existing_sources=existing_sources,
         )
@@ -220,24 +258,7 @@ async def run_agent(
         await db.flush()
         raise HTTPException(status_code=500, detail=f"Agent 执行失败: {exc}") from exc
 
-    if not payload.skip_search:
-        for lit in list(project.literatures):
-            await db.delete(lit)
-        await db.flush()
-        for src in result.get("sources") or []:
-            db.add(
-                Literature(
-                    project_id=project.id,
-                    zotero_item_key=src.get("zotero_item_key"),
-                    title=src.get("title") or "Untitled",
-                    authors=src.get("authors"),
-                    year=src.get("year"),
-                    doi=src.get("doi"),
-                    abstract=src.get("abstract"),
-                    relevance_score=src.get("relevance_score"),
-                    selected_for_draft=True,
-                )
-            )
+    _ = payload.skip_search
 
     ver_result = await db.execute(
         select(func.coalesce(func.max(DraftVersion.version_number), 0)).where(

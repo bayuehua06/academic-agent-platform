@@ -1,6 +1,8 @@
 """项目 CRUD 与 Agent 触发 API 测试。"""
 
-from tests.helpers import prepare_writing_inputs
+from unittest.mock import patch
+
+from tests.helpers import prepare_confirmed_literatures, prepare_writing_inputs
 
 
 async def test_list_projects_empty(auth_client):
@@ -83,15 +85,31 @@ async def test_run_agent_requires_assessment_and_locked_outline(auth_client):
     assert "Assessment" in run.json()["detail"] or "大纲" in run.json()["detail"]
 
 
+async def test_run_agent_requires_confirmed_literature(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "No Lit"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+    # 无 collection / 远程空 → 同步失败或空库
+    run = await auth_client.post(
+        f"/api/projects/{pid}/run-agent",
+        json={"max_papers": 3},
+    )
+    assert run.status_code == 400
+    detail = run.json()["detail"]
+    assert "文献" in detail or "Zotero" in detail or "Collection" in detail
+
+
 async def test_run_agent_creates_draft_and_literatures(auth_client):
     create = await auth_client.post("/api/projects", json={"title": "Agent Run"})
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
+    _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=3)
 
-    run = await auth_client.post(
-        f"/api/projects/{pid}/run-agent",
-        json={"max_papers": 3, "skip_search": False},
-    )
+    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+        run = await auth_client.post(
+            f"/api/projects/{pid}/run-agent",
+            json={"max_papers": 3, "skip_search": True},
+        )
     assert run.status_code == 200
     draft = run.json()
     assert draft["version_number"] == 1
@@ -111,3 +129,4 @@ async def test_run_agent_creates_draft_and_literatures(auth_client):
     ).json()
     assert len(lits) == 3
     assert all(item["title"] for item in lits)
+    assert all(item.get("confirmed_at") for item in lits)
