@@ -23,8 +23,8 @@ _EMPHASIS_RE = re.compile(
 )
 
 
-def sanitize_export_stem(title: str, version_number: int) -> str:
-    """项目名 + 版本号 → 安全文件名主干（不含扩展名）。"""
+def sanitize_export_stem(title: str, version_label: int | str) -> str:
+    """项目名 + 版本标签 → 安全文件名主干（不含扩展名）。"""
     raw = (title or "").strip() or "draft"
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", raw)
     cleaned = re.sub(r"\s+", "_", cleaned)
@@ -33,7 +33,9 @@ def sanitize_export_stem(title: str, version_number: int) -> str:
         cleaned = cleaned[:80].rstrip("._")
     if not cleaned:
         cleaned = "draft"
-    return f"{cleaned}_v{version_number}"
+    label = str(version_label).strip() or "1"
+    label = re.sub(r'[\\/:*?"<>|\s]+', "_", label)
+    return f"{cleaned}_v{label}"
 
 
 def _set_run_font(run, *, bold: bool = False, italic: bool = False, size_pt: float = 12) -> None:
@@ -171,6 +173,65 @@ def _is_references_heading(text: str) -> bool:
     return t in {"references", "reference", "参考文献"}
 
 
+def _is_md_table_row(line: str) -> bool:
+    """是否像 Markdown 表格行（含分隔行）。"""
+    s = line.strip()
+    if "|" not in s:
+        return False
+    # 至少两段（一个 | 不够稳；要求两侧或中间有单元格）
+    parts = [p.strip() for p in s.strip("|").split("|")]
+    return len(parts) >= 2
+
+
+def _is_md_table_separator(line: str) -> bool:
+    """| --- | :---: | ---: |"""
+    s = line.strip().strip("|")
+    if not s or "|" not in line:
+        return False
+    cells = [c.strip() for c in s.split("|")]
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-{3,}:?", c.replace(" ", "")) for c in cells if c)
+
+
+def _parse_md_table_row(line: str) -> List[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip().replace("\\|", "|") for c in s.split("|")]
+
+
+def _add_word_table(doc: Document, rows: List[List[str]]) -> None:
+    """把二维单元格写成 Word 表格（首行加粗作表头）。"""
+    if not rows:
+        return
+    width = max(len(r) for r in rows)
+    if width < 1:
+        return
+    norm = [r + [""] * (width - len(r)) for r in rows]
+    table = doc.add_table(rows=len(norm), cols=width)
+    table.style = "Table Grid"
+    for i, row_cells in enumerate(norm):
+        for j, cell_text in enumerate(row_cells):
+            cell = table.rows[i].cells[j]
+            # 清空默认空段再写
+            cell.text = ""
+            p = cell.paragraphs[0]
+            _set_paragraph_double_spacing(p, first_line_inches=0)
+            plain = _strip_md_link(cell_text)
+            plain = re.sub(r"[*_`]+", "", plain).strip() if i == 0 else plain
+            if i == 0:
+                run = p.add_run(plain)
+                _set_run_font(run, bold=True)
+            else:
+                _add_runs_with_emphasis(p, plain)
+    # 表后空一行间距（用空段）
+    spacer = doc.add_paragraph()
+    _set_paragraph_double_spacing(spacer, first_line_inches=0)
+
+
 def markdown_to_apa_docx(markdown_text: str, output_path: Path) -> Path:
     """将 Markdown 草稿写成 APA 风格 docx。"""
     doc = Document()
@@ -178,6 +239,8 @@ def markdown_to_apa_docx(markdown_text: str, output_path: Path) -> Path:
 
     in_references = False
     buffer: List[str] = []
+    lines = markdown_text.splitlines()
+    idx = 0
 
     def flush_paragraph() -> None:
         nonlocal buffer
@@ -195,13 +258,36 @@ def markdown_to_apa_docx(markdown_text: str, output_path: Path) -> Path:
             _set_paragraph_double_spacing(p, first_line_inches=0.5)
         _add_runs_with_emphasis(p, text)
 
-    for raw_line in markdown_text.splitlines():
-        line = raw_line.rstrip()
+    while idx < len(lines):
+        line = lines[idx].rstrip()
         stripped = line.strip()
 
         if not stripped:
             flush_paragraph()
+            idx += 1
             continue
+
+        # Markdown 表格：连续 | 行（跳过 --- 分隔行）
+        if _is_md_table_row(stripped) and not in_references:
+            # 需要至少表头 + 分隔，或 ≥2 行数据，才当表；单行带 | 仍当正文
+            look_ahead = [stripped]
+            j = idx + 1
+            while j < len(lines):
+                nxt = lines[j].strip()
+                if not nxt:
+                    break
+                if _is_md_table_row(nxt):
+                    look_ahead.append(nxt)
+                    j += 1
+                    continue
+                break
+            data_rows = [_parse_md_table_row(r) for r in look_ahead if not _is_md_table_separator(r)]
+            has_sep = any(_is_md_table_separator(r) for r in look_ahead)
+            if has_sep or len(data_rows) >= 2:
+                flush_paragraph()
+                _add_word_table(doc, data_rows)
+                idx = j
+                continue
 
         heading_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
         if heading_match:
@@ -228,6 +314,7 @@ def markdown_to_apa_docx(markdown_text: str, output_path: Path) -> Path:
             else:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             _set_paragraph_double_spacing(p, first_line_inches=0)
+            idx += 1
             continue
 
         # 无序列表 → 普通段落（APA 作业稿少用 bullet）
@@ -237,6 +324,7 @@ def markdown_to_apa_docx(markdown_text: str, output_path: Path) -> Path:
             stripped = re.sub(r"^\d+\.\s+", "", stripped)
 
         buffer.append(stripped)
+        idx += 1
 
     flush_paragraph()
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -61,6 +61,8 @@ def run_academic_workflow(
     skip_search: bool = False,
     zotero_collection_id: Optional[str] = None,
     existing_sources: Optional[list] = None,
+    section_directives: Optional[list] = None,
+    confirmed_facts: str = "",
 ) -> AcademicAgentState:
     """
     执行完整学术写作工作流。
@@ -88,6 +90,8 @@ def run_academic_workflow(
         "max_papers": max_papers,
         "skip_search": skip_search,
         "zotero_collection_id": zotero_collection_id,
+        "section_directives": list(section_directives or []),
+        "confirmed_facts": confirmed_facts or "",
         "error": None,
         "current_step": "start",
     }

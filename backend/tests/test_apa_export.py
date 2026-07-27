@@ -14,6 +14,7 @@ from app.services.pandoc_service import pandoc_service
 
 def test_sanitize_export_stem():
     assert sanitize_export_stem("My Paper / Draft", 3) == "My_Paper_Draft_v3"
+    assert sanitize_export_stem("My Paper", "1.1") == "My_Paper_v1.1"
     assert sanitize_export_stem("  ", 1) == "draft_v1"
     assert ":" not in sanitize_export_stem("a:b?", 2)
 
@@ -39,6 +40,32 @@ Smith, J. (2024). *Sample title*. Journal, 1(2), 3-4.
     ref_paras = [p for p in doc.paragraphs if "Smith" in p.text]
     assert ref_paras
     assert ref_paras[0].paragraph_format.left_indent is not None
+
+
+def test_markdown_to_apa_docx_tables(tmp_path: Path):
+    md = """## Methods
+
+Intro sentence.
+
+| Theme | Focus |
+| --- | --- |
+| Platformization | Gig economy |
+| Labor | Control |
+
+After the table.
+"""
+    out = tmp_path / "with_table.docx"
+    markdown_to_apa_docx(md, out)
+    doc = Document(str(out))
+    assert len(doc.tables) == 1
+    table = doc.tables[0]
+    assert table.rows[0].cells[0].text.strip() == "Theme"
+    assert "Platformization" in table.rows[1].cells[0].text
+    assert "Gig economy" in table.rows[1].cells[1].text
+    # 不应把 | 管道符当正文残留
+    body = "\n".join(p.text for p in doc.paragraphs)
+    assert "| Theme |" not in body
+    assert "After the table." in body
 
 
 async def test_export_filename_content_disposition(auth_client, monkeypatch):

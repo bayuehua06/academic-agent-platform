@@ -67,6 +67,7 @@ class ProjectOut(BaseModel):
     paper_outline: Optional[Any] = None
     outline_locked_at: Optional[datetime] = None
     specific_requirements: Optional[str] = None
+    confirmed_facts: Optional[str] = None
     zotero_collection_id: Optional[str] = None
     literature_databases: Optional[List[str]] = None
     status: str
@@ -183,11 +184,100 @@ class DraftVersionOut(BaseModel):
     id: UUID
     project_id: UUID
     version_number: int
+    major: Optional[int] = None
+    minor: int = 0
+    display_label: str = "1"
+    parent_version_id: Optional[UUID] = None
+    base_version_id: Optional[UUID] = None
     content_markdown: str
     apa_references_block: Optional[str] = None
     source_type: str
     changelog: Optional[str] = None
     created_at: datetime
+    # 确认工作区时附带（非 ORM 字段）
+    citation_warnings: Optional[List[str]] = None
+    directives_persisted: Optional[int] = None
+    references_matched: Optional[int] = None
+
+
+class DraftWorkingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    base_version_id: UUID
+    base_display_label: Optional[str] = None
+    content_markdown: str
+    section_overrides: Optional[dict] = None
+    pending_directives: Optional[list] = None
+    working_facts: Optional[str] = None
+    stale_headings: Optional[List[str]] = None
+    status: str
+    source_filename: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    # P1：分节 diff
+    sections: Optional[List[dict]] = None
+    # 大纲 heading → key_points（硬输入种子，供 UI）
+    outline_seeds: Optional[dict] = None
+
+
+class PolishSectionRequest(BaseModel):
+    heading: str = Field(..., min_length=1)
+    instruction: str = Field(..., min_length=1)
+    literature_ids: Optional[List[UUID]] = None
+    # 可选：用编辑器里未保存的节正文作为精修输入（含标题行更佳）
+    section_markdown: Optional[str] = None
+    # 多轮：以上一预览候选为底
+    base_markdown: Optional[str] = None
+    # 近几轮指令（可选上下文）
+    prior_instructions: Optional[List[str]] = None
+
+
+class PolishSectionPreview(BaseModel):
+    heading: str
+    preview_markdown: str
+    mode: str
+    model: Optional[str] = None
+    locked_count: int = 0
+    openai_configured: bool = False
+    error: Optional[str] = None
+    line_diff: Optional[List[dict]] = None
+
+
+class AcceptSectionRequest(BaseModel):
+    heading: str = Field(..., min_length=1)
+    preview_markdown: str = Field(..., min_length=1)
+    instruction: str = Field(..., min_length=1)
+
+
+class WorkingFactsUpdate(BaseModel):
+    working_facts: str = ""
+
+
+class SectionDirectiveOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    outline_heading: str
+    directive_text: str
+    instruction: Optional[str] = None
+    source_working_id: Optional[UUID] = None
+    confirmed_version_id: Optional[UUID] = None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class SectionDirectiveUpdate(BaseModel):
+    directive_text: Optional[str] = None
+    instruction: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class SectionDiffRequest(BaseModel):
+    heading: str = Field(..., min_length=1)
 
 
 class DraftExportRequest(BaseModel):

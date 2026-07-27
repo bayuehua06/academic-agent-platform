@@ -1,6 +1,6 @@
 # Implementation Status
 
-最后更新：2026-07-26 · **版本 1.2.1**
+最后更新：2026-07-27 · **版本 1.3.0**
 
 ## 总览
 
@@ -9,48 +9,47 @@
 | 项目脚手架 / docker-compose | ✅ 完成 | PostgreSQL 16 |
 | 根 `npm run dev` / `./start.sh` | ✅ 完成 | 前端 1980 / 后端 1976 |
 | JWT 鉴权 | ✅ 完成 | 注册 / 登录 / me |
-| Projects CRUD | ✅ 完成 | 定稿字段 + 改名/删除 + `run-agent`（A+C+Zotero 文献） |
+| Projects CRUD | ✅ 完成 | 定稿字段 + 改名/删除 + `run-agent`（A+C；文献可选） |
 | 进度状态推导 | ✅ 完成 | API 展示非「作业完成」语义 |
-| 多源输入重构 | ✅ 完成 | `docs/20260726-agent-input-redesign-discussion.md` |
-| Sources / Summarizer / Inputs UI | ✅ 完成 | 短预览 + 查看全部；摘要跟原文语言 |
-| 文献检索 + Zotero（Z0–Z4、Z6） | ✅ 完成 | 见 `docs/20260726-literature-zotero-search-discussion.md` |
-| IEEE + ACM 多库检索 / 去重 / UI 勾选 | ✅ 完成 | 1.1.2 |
-| Z5 LLM 造检索词 | ✅ 完成 | 1.2.0：`suggest-query` + 向导按钮 / 可选进章自动 |
-| Writer LLM 长文 | ✅ 完成 | 1.2.0：约束抽取 + 分节/扩写/校验；默认英文 |
-| Agent 按大纲写作 | ✅ 完成 | LLM 或模板；文献来自 Zotero sync |
-| NotebookLM 抓取 | ✅ 完成 | |
-| Pandoc 导出 / Word 导入 | ✅ / ⚠️ PDF 依赖系统 pandoc | 1.2.1：APA docx 版式；文件名项目名_v版本；References 权威块替换 |
-| Draft 顶栏下载/导入 | ✅ 完成 | 1.2.1 |
-| API 自动化测试 | ✅ 完成 | pytest |
+| 多源输入重构 | ✅ 完成 | 含 pptx；大纲 Word 读表；模板包规范化 |
+| Sources / Summarizer / Inputs UI | ✅ 完成 | 短预览 + 查看全部；删光 C 清锁定 |
+| 文献检索 + Zotero（Z0–Z5） | ✅ 完成 | 向导可跳过章；空库可写作 |
+| Writer LLM + **引用护栏** | ✅ 完成 | 禁止库外引用 + 成稿清洗；大纲 Seed；directives/Facts 注入 |
+| 草稿精修 P0–P2 | ✅ 完成 | working / diff / polish·accept / 确认 minor（**1.2.2**） |
+| 精修多轮 + 跨节（M0–M3） | ✅ 完成 | 候选栈 / Facts / stale / 大纲 Seed（**1.3.0**） |
+| 确认落库 P3 / M4 | ✅ 完成 | References 重建 + `section_directives` + `confirmed_facts` |
+| Pandoc 导出 / Word 导入 | ✅ / ⚠️ PDF 依赖 pandoc | APA；Markdown 表→Word 表；文件名 |
+| API 自动化测试 | ✅ 完成 | pytest（含 polish / M4 confirm / citation） |
 | Alembic 迁移 | ⏳ 占位 | 现用 `create_all` + 硬切加列 |
+| 精修 P4 UX | 📋 未开始 | 严格引用阻断、指令编辑打磨等 |
 
 ## 前端组件
 
 | 组件 | 状态 |
 |------|------|
-| ProjectInputs | ✅ A/B/C/D；预览 / 全文 |
-| LiteratureConfirmPanel | ✅ 按章向导 / IEEE·ACM 勾选 / Z5 造词 / 确认 / 同步 |
-| ZoteroList | ✅ 已确认库 |
-| DraftViewer / VersionHistory | ✅ 顶栏 Word/PDF/导入 |
-| 登录 / 注册 / Dashboard | ✅ 改名 / 删除 / 进度标签 |
+| ProjectInputs | ✅ A/B/C/D；大纲 .docx/.dotx |
+| LiteratureConfirmPanel | ✅ 按章向导 / 本章不需文献 / Z5 |
+| DraftPolishPanel | ✅ 多轮候选 / Facts / Seed / stale |
+| SectionDirectivesPanel | ✅ 落库指令列表 / 停用 |
+| DraftViewer / VersionHistory | ✅ major/minor；顶栏导出 |
+| 登录 / 注册 / Dashboard | ✅ |
 
 ## LangGraph 节点
 
 | 节点 | 状态 |
 |------|------|
-| Requirement Analyzer | ✅ 优先锁定大纲 |
-| Literature Searcher | ✅ `skip_search` + 上游已 sync 的 sources |
-| APA Writer | ✅ 有 Key → 约束 + 分节 LLM；否则模板 |
-| APA Formatter | ✅ |
+| Requirement Analyzer | ✅ |
+| Literature Searcher | ✅ `skip_search` 时空库不 mock |
+| APA Writer | ✅ 约束 + 分节 LLM + Seed + directives/Facts + citation_guard |
+| APA Formatter | ✅ 仅按真 sources 建 References |
 
 ## 已知限制
 
-1. Writer / Z5 依赖 OpenAI 额度与网络；失败自动回退。  
-2. 检索 run 存进程内存，重启后端后候选会话丢失（已确认文献在 Zotero/DB）。  
-3. 超长 PDF 入库截断；CSL 为 stub；长稿需人工审阅。
+1. 确认时未匹配文内引用仅警告，不阻断（P4 可加严格模式）。  
+2. 文档内嵌图 OCR、真插图生成未做。  
+3. 检索 run 存进程内存；PDF 导出依赖系统 pandoc。
 
 ## 下一步建议
 
-1. 用户上传版本后：约束校验 + 按节润色（未立项）。  
-2. 候选相关性 LLM 打分（可选）。  
-3. Alembic；Writer 分章流式 / 前端进度。
+1. P4：严格引用选项、指令编辑 UX、弃稿清理。  
+2. Alembic；候选相关性打分（可选）。

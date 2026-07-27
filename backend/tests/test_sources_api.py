@@ -121,6 +121,14 @@ async def test_outline_lock_sets_paper_outline(auth_client):
     assert "Introduction" in headings
     assert "Methods" in headings
 
+    # 删光大纲后应清空锁定
+    deleted = await auth_client.delete(f"/api/projects/{pid}/sources/{doc['id']}")
+    assert deleted.status_code == 204
+    project = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert project["paper_outline"] is None
+    assert project["outline_locked_at"] is None
+    assert project["outline_ready"] is False
+
 
 async def test_upload_markdown_source(auth_client):
     pid = await _create_project(auth_client, "UploadMd")

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -15,18 +16,22 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.agents.graph import run_academic_workflow
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.db.models import DraftVersion, Project, User
+from app.db.models import DraftVersion, Project, SectionDirective, User
 from app.models.schemas import (
     AgentRunRequest,
     DraftVersionOut,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
+    SectionDirectiveOut,
+    SectionDirectiveUpdate,
 )
 from app.services.literature_providers import default_database_ids, parse_database_ids
 from app.services.literature_workflow import sync_literatures_from_zotero
 from app.services.project_assembly import ensure_writing_ready
+from app.services.draft_versioning import labels_from_draft, next_agent_major, next_version_number
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
@@ -91,6 +96,7 @@ def _to_project_out(project: Project) -> ProjectOut:
         paper_outline=project.paper_outline,
         outline_locked_at=project.outline_locked_at,
         specific_requirements=project.specific_requirements,
+        confirmed_facts=project.confirmed_facts,
         zotero_collection_id=project.zotero_collection_id,
         literature_databases=project.literature_databases,
         status=_derive_project_status(
@@ -238,37 +244,29 @@ async def run_agent(
     ]
     paper_outline = project.paper_outline if isinstance(project.paper_outline, list) else []
 
-    # 写作前以 Zotero 项目 Collection 为真源拉取（含离线新增）
+    # 有 Zotero Collection 时以远端为真源；允许零文献写作
     status_before = project.status
     project.status = "FETCHING_PAPERS"
     await db.flush()
 
-    try:
-        synced = await sync_literatures_from_zotero(project, db)
-    except ValueError as exc:
-        project.status = status_before
-        await db.flush()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        project.status = status_before
-        await db.flush()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        project.status = status_before
-        await db.flush()
-        raise HTTPException(status_code=502, detail=f"从 Zotero 拉取文献失败: {exc}") from exc
+    synced: list = list(project.literatures or [])
+    if project.zotero_collection_id:
+        try:
+            synced = await sync_literatures_from_zotero(project, db)
+        except ValueError as exc:
+            project.status = status_before
+            await db.flush()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            # Zotero 未配置等：退回本地镜像（可为空）
+            logger.warning("写作前 Zotero 同步跳过 project=%s: %s", project.id, exc)
+            synced = list(project.literatures or [])
+        except Exception as exc:  # noqa: BLE001
+            project.status = status_before
+            await db.flush()
+            raise HTTPException(status_code=502, detail=f"从 Zotero 拉取文献失败: {exc}") from exc
 
     sources_for_draft = [lit for lit in synced if lit.selected_for_draft]
-    if not sources_for_draft:
-        project.status = status_before
-        await db.flush()
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Zotero 项目集合中暂无文献。请先检索确认入库，"
-                "或在 Zotero 客户端向该项目 Collection/章节子集合添加条目后重试"
-            ),
-        )
 
     existing_sources = [
         {
@@ -281,6 +279,21 @@ async def run_agent(
             "zotero_item_key": lit.zotero_item_key,
         }
         for lit in sources_for_draft
+    ]
+
+    dir_result = await db.execute(
+        select(SectionDirective).where(
+            SectionDirective.project_id == project.id,
+            SectionDirective.active.is_(True),
+        )
+    )
+    section_directives = [
+        {
+            "outline_heading": d.outline_heading,
+            "directive_text": d.directive_text,
+            "instruction": d.instruction or "",
+        }
+        for d in dir_result.scalars().all()
     ]
 
     try:
@@ -296,6 +309,8 @@ async def run_agent(
             skip_search=True,
             zotero_collection_id=project.zotero_collection_id,
             existing_sources=existing_sources,
+            section_directives=section_directives,
+            confirmed_facts=project.confirmed_facts or "",
         )
     except Exception as exc:  # noqa: BLE001
         project.status = status_before
@@ -304,20 +319,18 @@ async def run_agent(
 
     _ = payload.skip_search
 
-    ver_result = await db.execute(
-        select(func.coalesce(func.max(DraftVersion.version_number), 0)).where(
-            DraftVersion.project_id == project.id
-        )
-    )
-    next_version = int(ver_result.scalar_one()) + 1
+    next_version = await next_version_number(db, project.id)
+    major = await next_agent_major(db, project.id)
     draft = DraftVersion(
         project_id=project.id,
         version_number=next_version,
+        major=major,
+        minor=0,
         content_markdown=result.get("draft_markdown") or "",
         apa_references_block=result.get("apa_references"),
         source_type="AGENT_GEN",
         changelog=(
-            f"LangGraph 生成 v{next_version}; keywords={result.get('keywords')}; "
+            f"LangGraph 生成 v{major}; keywords={result.get('keywords')}; "
             f"writer={result.get('writer_mode') or 'template'}; "
             f"model={result.get('writer_model')}; "
             f"words≈{result.get('writer_word_count')}; "
@@ -331,4 +344,87 @@ async def run_agent(
     project.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(draft)
-    return draft
+    maj, minor, label = labels_from_draft(draft)
+    return DraftVersionOut(
+        id=draft.id,
+        project_id=draft.project_id,
+        version_number=draft.version_number,
+        major=maj,
+        minor=minor,
+        display_label=label,
+        parent_version_id=draft.parent_version_id,
+        base_version_id=draft.base_version_id,
+        content_markdown=draft.content_markdown,
+        apa_references_block=draft.apa_references_block,
+        source_type=draft.source_type,
+        changelog=draft.changelog,
+        created_at=draft.created_at,
+    )
+
+
+@router.get("/{project_id}/section-directives", response_model=List[SectionDirectiveOut])
+async def list_section_directives(
+    project_id: UUID,
+    active_only: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> List[SectionDirectiveOut]:
+    """列出项目章节精修指令（确认工作区后落库）。"""
+    await _get_user_project(project_id, current_user, db)
+    q = select(SectionDirective).where(SectionDirective.project_id == project_id)
+    if active_only:
+        q = q.where(SectionDirective.active.is_(True))
+    q = q.order_by(SectionDirective.created_at.desc())
+    result = await db.execute(q)
+    return list(result.scalars().all())
+
+
+@router.patch(
+    "/{project_id}/section-directives/{directive_id}",
+    response_model=SectionDirectiveOut,
+)
+async def update_section_directive(
+    project_id: UUID,
+    directive_id: UUID,
+    payload: SectionDirectiveUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SectionDirectiveOut:
+    """编辑或停用章节指令。"""
+    await _get_user_project(project_id, current_user, db)
+    row = await db.get(SectionDirective, directive_id)
+    if not row or row.project_id != project_id:
+        raise HTTPException(status_code=404, detail="指令不存在")
+    if payload.directive_text is not None:
+        text = payload.directive_text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="directive_text 不能为空")
+        row.directive_text = text
+    if payload.instruction is not None:
+        row.instruction = payload.instruction.strip() or None
+    if payload.active is not None:
+        row.active = payload.active
+    row.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(row)
+    return row
+
+
+@router.delete(
+    "/{project_id}/section-directives/{directive_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def deactivate_section_directive(
+    project_id: UUID,
+    directive_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """软删：将指令标为 inactive。"""
+    await _get_user_project(project_id, current_user, db)
+    row = await db.get(SectionDirective, directive_id)
+    if not row or row.project_id != project_id:
+        raise HTTPException(status_code=404, detail="指令不存在")
+    row.active = False
+    row.updated_at = datetime.now(timezone.utc)
+    await db.flush()

@@ -104,18 +104,25 @@ async def test_run_agent_requires_assessment_and_locked_outline(auth_client):
     assert "Assessment" in run.json()["detail"] or "大纲" in run.json()["detail"]
 
 
-async def test_run_agent_requires_confirmed_literature(auth_client):
-    create = await auth_client.post("/api/projects", json={"title": "No Lit"})
+async def test_run_agent_allows_zero_literature(auth_client, monkeypatch):
+    """允许零文献写作：仅需 A 定稿 + 锁定 C。"""
+    from app.services import summarizer as summarizer_module
+
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
+    create = await auth_client.post("/api/projects", json={"title": "No Lit OK"})
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
-    # 无 collection / 远程空 → 同步失败或空库
     run = await auth_client.post(
         f"/api/projects/{pid}/run-agent",
         json={"max_papers": 3},
     )
-    assert run.status_code == 400
-    detail = run.json()["detail"]
-    assert "文献" in detail or "Zotero" in detail or "Collection" in detail
+    assert run.status_code == 200, run.text
+    draft = run.json()
+    assert draft["source_type"] == "AGENT_GEN"
+    assert draft["content_markdown"]
+    project = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert project["status"] == "HAS_DRAFT"
+    assert project["literature_count"] == 0
 
 
 async def test_run_agent_creates_draft_and_literatures(auth_client, monkeypatch):

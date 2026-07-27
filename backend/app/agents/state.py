@@ -57,3 +57,6 @@ class AcademicAgentState(TypedDict, total=False):
     zotero_collection_id: Optional[str]
     error: Optional[str]
     current_step: str
+    # P3/M4：确认后的章节指令与跨节 Facts
+    section_directives: List[Dict[str, Any]]
+    confirmed_facts: str

@@ -2,6 +2,7 @@
 
 from app.db.models import (
     DraftVersion,
+    DraftWorking,
     Literature,
     Project,
     ProjectSourceDocument,
@@ -14,4 +15,5 @@ __all__ = [
     "ProjectSourceDocument",
     "Literature",
     "DraftVersion",
+    "DraftWorking",
 ]

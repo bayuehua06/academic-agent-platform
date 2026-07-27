@@ -91,15 +91,20 @@ class PandocService:
 
     def docx_to_markdown(self, docx_path: Path) -> str:
         """将 Word 文档转为 Markdown。"""
+        from app.services.word_package import normalize_word_package_inplace
+
+        path = Path(docx_path)
+        normalize_word_package_inplace(path)
+
         if shutil.which("pandoc"):
             try:
                 import pypandoc
 
-                return pypandoc.convert_file(str(docx_path), to="md", format="docx")
+                return pypandoc.convert_file(str(path), to="md", format="docx")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("pypandoc 导入失败，回退 python-docx: %s", exc)
 
-        return self._fallback_docx_to_md(docx_path)
+        return self._fallback_docx_to_md(path)
 
     def _fallback_docx_to_md(self, docx_path: Path) -> str:
         """无 pandoc 时用 python-docx 提取段落与表格为 Markdown。"""

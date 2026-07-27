@@ -70,6 +70,12 @@ class WritingConstraints:
         lines.append(f"- Overall length target: {lo}-{hi} words (count in the output language).")
         if self.citation_style:
             lines.append(f"- Citation style: {self.citation_style}")
+        # 永久硬规则：禁止编造文献（与 citation_guard 系统块一致）
+        lines.append(
+            "- CITATION INTEGRITY (non-negotiable): Cite ONLY from ALLOWED SOURCES. "
+            "Out-of-library citations are forbidden. If ALLOWED SOURCES is NONE, use no in-text citations. "
+            "Never invent authors, years, titles, DOIs, or findings."
+        )
         if self.checklist:
             lines.append("- Checklist:")
             for item in self.checklist:

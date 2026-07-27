@@ -2,17 +2,20 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Download, Upload } from "lucide-react";
+import { Download, Sparkles, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { DraftViewer } from "@/components/DraftViewer";
+import { DraftPolishPanel } from "@/components/DraftPolishPanel";
 import { LiteratureConfirmPanel } from "@/components/LiteratureConfirmPanel";
 import { ProjectInputs } from "@/components/ProjectInputs";
+import { SectionDirectivesPanel } from "@/components/SectionDirectivesPanel";
 import { VersionHistory } from "@/components/VersionHistory";
 import {
   apiFetch,
   downloadExport,
   buildExportFilename,
   DraftVersion,
+  DraftWorking,
   listSources,
   Literature,
   Project,
@@ -55,6 +58,7 @@ export default function ProjectDetailPage() {
   const [literatures, setLiteratures] = useState<Literature[]>([]);
   const [drafts, setDrafts] = useState<DraftVersion[]>([]);
   const [selectedDraft, setSelectedDraft] = useState<DraftVersion | null>(null);
+  const [working, setWorking] = useState<DraftWorking | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,16 +66,18 @@ export default function ProjectDetailPage() {
   const [titleDraft, setTitleDraft] = useState("");
 
   const loadAll = useCallback(async () => {
-    const [p, srcs, lits, vers] = await Promise.all([
+    const [p, srcs, lits, vers, wrk] = await Promise.all([
       apiFetch<Project>(`/projects/${projectId}`),
       listSources(projectId),
       apiFetch<Literature[]>(`/zotero/projects/${projectId}/literatures`),
       apiFetch<DraftVersion[]>(`/drafts/${projectId}`),
+      apiFetch<DraftWorking | null>(`/drafts/${projectId}/working`),
     ]);
     setProject(p);
     setSources(srcs);
     setLiteratures(lits);
     setDrafts(vers);
+    setWorking(wrk);
     setSelectedDraft((prev) => {
       if (prev && vers.some((v) => v.id === prev.id)) {
         return vers.find((v) => v.id === prev.id) || vers[0] || null;
@@ -171,14 +177,22 @@ export default function ProjectDetailPage() {
   }
 
   async function onImportDocx(file: File) {
+    if (!selectedDraft) {
+      setError("请先选择一个已确认版本作为上传基础（base）");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const form = new FormData();
       form.append("file", file);
       const token = localStorage.getItem("access_token");
+      const qs = new URLSearchParams({
+        project_id: projectId,
+        base_version_id: selectedDraft.id,
+      });
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:1976/api"}/drafts/import-docx?project_id=${projectId}`,
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:1976/api"}/drafts/import-docx?${qs}`,
         {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -187,14 +201,89 @@ export default function ProjectDetailPage() {
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || "导入失败");
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : "导入失败",
+        );
       }
-      const draft = (await res.json()) as DraftVersion;
-      setMessage(`已导入为 v${draft.version_number}`);
+      const wrk = (await res.json()) as DraftWorking;
+      setWorking(wrk);
+      setMessage(
+        `已上传到精修工作区（基于 v${wrk.base_display_label || selectedDraft.display_label}）。确认后才会生成小版本。`,
+      );
+      setTab("draft");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startPolishFromSelected() {
+    if (!selectedDraft) {
+      setError("请先选择一个版本作为精修基础");
+      return;
+    }
+    if (working && !confirm("已有未确认工作区，开启新精修将丢弃它。继续？")) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const wrk = await apiFetch<DraftWorking>(
+        `/drafts/${projectId}/working/start?base_version_id=${selectedDraft.id}`,
+        { method: "POST" },
+      );
+      setWorking(wrk);
+      setMessage(
+        `已基于 v${wrk.base_display_label || selectedDraft.display_label} 开启精修工作区（无需上传）`,
+      );
+      setTab("draft");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "开启精修失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmWorking() {
+    setBusy(true);
+    setError("");
+    try {
+      const draft = await apiFetch<DraftVersion>(
+        `/drafts/${projectId}/working/confirm`,
+        { method: "POST" },
+      );
+      const bits = [`已确认精修 → v${draft.display_label}`];
+      if (draft.directives_persisted) {
+        bits.push(`落库指令 ${draft.directives_persisted} 条`);
+      }
+      if (draft.references_matched != null) {
+        bits.push(`References 匹配 ${draft.references_matched}`);
+      }
+      if (draft.citation_warnings?.length) {
+        bits.push(`未匹配引用 ${draft.citation_warnings.length}（已警告）`);
+      }
+      setMessage(bits.join(" · "));
       await loadAll();
       setSelectedDraft(draft);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "导入失败");
+      setError(err instanceof Error ? err.message : "确认失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardWorking() {
+    if (!confirm("确定丢弃当前精修工作区？未确认的修改将丢失。")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiFetch(`/drafts/${projectId}/working`, { method: "DELETE" });
+      setWorking(null);
+      setMessage("已丢弃精修工作区");
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "丢弃失败");
     } finally {
       setBusy(false);
     }
@@ -214,11 +303,7 @@ export default function ProjectDetailPage() {
     { id: "draft", label: "Draft & Versions" },
   ];
 
-  const canRun = Boolean(
-    project.assessment_ready &&
-      project.outline_ready &&
-      literatures.some((l) => l.confirmed_at && l.selected_for_draft),
-  );
+  const canRun = Boolean(project.assessment_ready && project.outline_ready);
 
   return (
     <main className="min-h-screen">
@@ -289,13 +374,13 @@ export default function ProjectDetailPage() {
               title={
                 canRun
                   ? "运行学术 Agent"
-                  : "需 A 定稿 + C 锁定 + 已确认文献"
+                  : "需 A 定稿 + C 锁定"
               }
             >
               运行学术 Agent
             </button>
             {!canRun && (
-              <p className="text-xs text-stone-500">需 A + 锁定 C + 文献确认入库</p>
+              <p className="text-xs text-stone-500">需 A 定稿 + 锁定大纲（文献可选）</p>
             )}
           </div>
         </div>
@@ -363,7 +448,7 @@ export default function ProjectDetailPage() {
                   downloadExport(
                     projectId,
                     "docx",
-                    buildExportFilename(project?.title, selectedDraft?.version_number, "docx"),
+                    buildExportFilename(project?.title, selectedDraft?.display_label, "docx"),
                     selectedDraft?.id,
                   ).catch((e) => setError(e.message))
                 }
@@ -381,7 +466,7 @@ export default function ProjectDetailPage() {
                   downloadExport(
                     projectId,
                     "pdf",
-                    buildExportFilename(project?.title, selectedDraft?.version_number, "pdf"),
+                    buildExportFilename(project?.title, selectedDraft?.display_label, "pdf"),
                     selectedDraft?.id,
                   ).catch((e) => setError(e.message))
                 }
@@ -390,11 +475,21 @@ export default function ProjectDetailPage() {
                 <PdfBadge />
                 <span>PDF</span>
               </button>
+              <button
+                type="button"
+                className="btn-outline gap-1.5 px-3 py-1.5 text-xs"
+                disabled={!selectedDraft || busy}
+                title="基于当前选中版本开启精修（无需上传）"
+                onClick={() => startPolishFromSelected()}
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                <span>精修</span>
+              </button>
               <label
                 className={`btn-outline gap-1.5 px-3 py-1.5 text-xs ${
                   busy ? "pointer-events-none opacity-50" : "cursor-pointer"
                 }`}
-                title="上传 Word 导入为新版本"
+                title="上传 Word（基于当前选中版本，进入精修工作区）"
               >
                 <Upload className="h-3.5 w-3.5" aria-hidden />
                 <WordBadge />
@@ -413,11 +508,73 @@ export default function ProjectDetailPage() {
               </label>
               {selectedDraft && (
                 <span className="ml-auto text-xs text-stone-500">
-                  当前：v{selectedDraft.version_number}
+                  当前：v{selectedDraft.display_label}
+                  {working ? " · 有未确认工作区" : ""}
                 </span>
               )}
             </div>
-            <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+            {working && (
+              <div className="card flex flex-wrap items-center gap-3 border-amber-200 bg-amber-50 py-3">
+                <p className="text-sm text-amber-900">
+                  精修工作区（基于 v{working.base_display_label || "?"}
+                  {working.source_filename ? ` · ${working.source_filename}` : ""}
+                  ）。可分节对比与 AI 精修；确认后生成小版本。
+                </p>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    type="button"
+                    className="btn-outline px-3 py-1.5 text-xs"
+                    disabled={busy}
+                    onClick={() => discardWorking()}
+                  >
+                    丢弃
+                  </button>
+                  <button
+                    type="button"
+                    className="btn px-3 py-1.5 text-xs"
+                    disabled={busy}
+                    onClick={() => confirmWorking()}
+                  >
+                    确认 → 小版本
+                  </button>
+                </div>
+              </div>
+            )}
+            {working ? (
+              <DraftPolishPanel
+                projectId={projectId}
+                working={working}
+                literatures={literatures}
+                busy={busy}
+                setBusy={setBusy}
+                onMessage={setMessage}
+                onError={setError}
+                onWorkingChange={setWorking}
+              />
+            ) : (
+              <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+                <aside className="card">
+                  <h2 className="mb-3 font-display text-base font-semibold">版本历史</h2>
+                  <VersionHistory
+                    versions={drafts}
+                    selectedId={selectedDraft?.id}
+                    onSelect={setSelectedDraft}
+                  />
+                </aside>
+                <div className="space-y-4">
+                  <DraftViewer draft={selectedDraft} />
+                  <SectionDirectivesPanel
+                    projectId={projectId}
+                    busy={busy}
+                    setBusy={setBusy}
+                    onMessage={setMessage}
+                    onError={setError}
+                    refreshKey={selectedDraft?.id || drafts.length}
+                  />
+                </div>
+              </div>
+            )}
+            {working && (
               <aside className="card">
                 <h2 className="mb-3 font-display text-base font-semibold">版本历史</h2>
                 <VersionHistory
@@ -426,8 +583,17 @@ export default function ProjectDetailPage() {
                   onSelect={setSelectedDraft}
                 />
               </aside>
-              <DraftViewer draft={selectedDraft} />
-            </div>
+            )}
+            {working && (
+              <SectionDirectivesPanel
+                projectId={projectId}
+                busy={busy}
+                setBusy={setBusy}
+                onMessage={setMessage}
+                onError={setError}
+                refreshKey={working.updated_at}
+              />
+            )}
           </div>
         )}
       </div>

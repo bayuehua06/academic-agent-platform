@@ -69,13 +69,13 @@ async def test_export_docx(auth_client):
     assert len(res.content) > 100
 
 
-async def test_import_docx_creates_manual_version(auth_client):
+async def test_import_docx_opens_working(auth_client):
     pid, first = await _project_with_draft(auth_client)
     payload = _make_docx_bytes(
         ["# Imported Draft", "This paragraph was edited in Word."]
     )
     res = await auth_client.post(
-        f"/api/drafts/import-docx?project_id={pid}",
+        f"/api/drafts/import-docx?project_id={pid}&base_version_id={first['id']}",
         files={
             "file": (
                 "edited.docx",
@@ -86,8 +86,8 @@ async def test_import_docx_creates_manual_version(auth_client):
     )
     assert res.status_code == 201
     body = res.json()
-    assert body["version_number"] == first["version_number"] + 1
-    assert body["source_type"] == "MANUAL_IMPORT"
+    assert body["status"] == "ACTIVE"
+    assert body["base_version_id"] == first["id"]
     assert (
         "Imported" in body["content_markdown"]
         or "edited" in body["content_markdown"].lower()
@@ -96,10 +96,9 @@ async def test_import_docx_creates_manual_version(auth_client):
 
 
 async def test_import_rejects_non_docx(auth_client):
-    create = await auth_client.post("/api/projects", json={"title": "Bad"})
-    pid = create.json()["id"]
+    pid, first = await _project_with_draft(auth_client)
     res = await auth_client.post(
-        f"/api/drafts/import-docx?project_id={pid}",
+        f"/api/drafts/import-docx?project_id={pid}&base_version_id={first['id']}",
         files={"file": ("notes.txt", b"hello", "text/plain")},
     )
     assert res.status_code == 400

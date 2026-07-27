@@ -2,6 +2,84 @@
 
 本文件记录 Academic Agent Platform 的版本与功能变更摘要（功能 / API / 组件 / 数据库）。详细实现见 `docs/`。
 
+## [1.3.0] - 2026-07-27
+
+### 新增 / 变更
+
+- **节内多轮精修**：预览上可继续追问（`base_markdown` / 候选栈）；满意后再 Accept；不提前 +minor
+- **跨节连续性**：Working Facts、上游节摘要注入；Accept 上游后下游标「建议再精修」
+- **大纲 Seed 硬输入**：锁定大纲 `key_points` 对 Writer / 精修均为权威种子（禁止擅自换 case / 改名提案）
+- **确认落库（P3）**：confirm 时按文内引用重建 References；`pending_directives` → `section_directives`；Facts → `projects.confirmed_facts`
+- **整篇重生注入**：`run-agent` / Writer 按节读取 active directives + confirmed facts；新开工作区预填 Facts
+
+### API
+
+- `POST .../working/polish-section`：增 `base_markdown?`、`prior_instructions?`
+- `PATCH .../working/facts`：更新 Working Facts
+- `POST .../working/confirm`：响应增 `citation_warnings` / `directives_persisted` / `references_matched`
+- `GET|PATCH|DELETE .../projects/{id}/section-directives`：章节指令列表 / 编辑 / 软删
+- `GET .../projects/{id}`：增 `confirmed_facts`
+
+### 组件 / 服务
+
+- `draft_polish.py`（多轮 + Seed / Facts / 上游 / directives 注入）
+- `references_rebuild.py`（确认时 References）
+- `DraftPolishPanel`（候选栈、Facts、stale 标记）；`SectionDirectivesPanel`
+- Writer：`OUTLINE SEED` + SECTION DIRECTIVES + CONFIRMED FACTS
+
+### 数据库
+
+- `projects.confirmed_facts`
+- `draft_workings.working_facts` / `stale_headings`
+- 新表 `section_directives`
+
+### 文档
+
+- 更新 README、`api_reference`、`database_schema`、`implementation_status`
+- 设计文档 `20260726` / `20260727` 标记 P3 / M0–M4 已入本版本
+
+### 已知限制（本版本）
+
+- 未匹配引用仅警告不阻断；指令编辑 UX 仍简（P4）
+- 文档内嵌图片 OCR / 真插图生成未做
+- PDF 导出仍依赖系统 pandoc
+
+## [1.2.2] - 2026-07-27
+
+### 新增 / 变更
+
+- **草稿精修工作区（P0–P2）**：基于已确认版本开启 working；分节 diff / 图·表锁定；`polish-section` / `accept-section`；确认工作区出 minor（如 9.1）
+- **大纲 Word**：按文档顺序解析段落 + **表格文字** 进入章节 `key_points`；支持 Word 模板包（`template.main`→`document.main`）上传
+- **按章文献向导**：「本章不需文献」可标记跳过；末章可结束；进度区分有文献 / 已跳过
+- **零文献可写作**：`run-agent` 仅需 A 定稿 + 锁定 C；文献可选
+- **引用完整性（硬约束）**：Writer / 扩写 / 补写 / 精修共用禁止库外引用规则；成稿后清洗非法文内引用；剥除模型自写 References
+- **Researcher 空库修复**：`skip_search=True` 时即使 `sources=[]` 也不再注入 mock 假文献（修复 Smith/Wang 等幻觉来源）
+- **APA 导出**：Markdown 管道表格转为 Word 真表格；草稿正文不再写入 Writer 模型调试行
+- **Inputs**：大纲区接受 `.docx` / `.dotx`；删光 OUTLINE 时清空已锁 `paper_outline`
+
+### API
+
+- `POST .../run-agent`：无文献时 **不再 400**；有 Collection 仍同步 Zotero，无则空 sources 写作
+- `POST .../drafts/{id}/working/*`：start / discard / confirm / polish-section / accept-section / section-diff（P0–P2）
+- `DELETE .../sources/{id}`：删光 OUTLINE 时清空锁定大纲与相关进度状态
+
+### 组件 / 服务
+
+- `citation_guard.py`、`word_package.py`、`outline_parser`（含表）、`apa_docx`（含表）、`researcher`（skip 空库）
+- `draft_sections.py` / `draft_polish.py` / `DraftPolishPanel`
+- `LiteratureConfirmPanel`：本章不需文献 / 结束向导
+
+### 文档
+
+- 更新 README、`api_reference`、`implementation_status`
+- 新增 `docs/20260727-draft-polish-multiturn-cross-section-discussion.md`（节内多轮精修 + 跨节依赖，规划中）
+
+### 已知限制（本版本）
+
+- 精修仍为单轮预览→采纳；节内多轮对话与跨节 Working Facts 见新设计文档（未实现）
+- 文档内嵌图片 OCR / 真插图生成未做
+- PDF 导出仍依赖系统 pandoc
+
 ## [1.2.1] - 2026-07-26
 
 ### 新增 / 变更

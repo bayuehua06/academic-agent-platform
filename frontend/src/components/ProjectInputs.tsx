@@ -33,22 +33,22 @@ const ROLE_META: Record<
   ASSESSMENT: {
     title: "A · Assessment / Rubric",
     hint: "粘贴或上传评分标准、作业说明（可多份）。",
-    accept: ".md,.txt,.docx,.pdf",
+    accept: ".md,.txt,.docx,.pdf,.pptx",
   },
   BACKGROUND: {
     title: "B · 背景材料",
-    hint: "可选。上传笔记/PDF，或从 NotebookLM URL 更新。",
-    accept: ".md,.txt,.docx,.pdf",
+    hint: "可选。上传笔记/PDF/PPT，或从 NotebookLM URL 更新。",
+    accept: ".md,.txt,.docx,.pdf,.pptx",
   },
-  OUTLINE: {
-    title: "C · 论文大纲",
-    hint: "上传带 Heading 的 Word，或粘贴 Markdown # 标题；预览后锁定。",
-    accept: ".md,.txt,.docx",
-  },
+    OUTLINE: {
+      title: "C · 论文大纲",
+      hint: "上传带 Heading 的 Word（.docx / .dotx），或粘贴 Markdown # 标题；预览后锁定。",
+      accept: ".md,.txt,.docx,.dotx",
+    },
   SPECIFIC: {
     title: "D · 具体要求",
     hint: "字数、引用风格等额外约束（可选）。",
-    accept: ".md,.txt,.docx,.pdf",
+    accept: ".md,.txt,.docx,.pdf,.pptx",
   },
 };
 

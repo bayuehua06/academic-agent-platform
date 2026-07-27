@@ -56,6 +56,33 @@ def test_parse_docx_outline(tmp_path: Path):
     assert items[1]["heading"] == "Section Two"
 
 
+def test_parse_docx_outline_includes_tables(tmp_path: Path):
+    """标题下的表格文字必须进入 key_points（文献向导依赖此字段）。"""
+    path = tmp_path / "outline_table.docx"
+    doc = Document()
+    doc.add_heading("Literature Review", level=1)
+    doc.add_paragraph("Intro sentence.")
+    table = doc.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "Theme"
+    table.rows[0].cells[1].text = "Focus"
+    table.rows[1].cells[0].text = "Platformization"
+    table.rows[1].cells[1].text = "Gig economy"
+    doc.add_heading("Conclusion", level=1)
+    doc.add_paragraph("Wrap up.")
+    doc.save(str(path))
+
+    items = parse_docx_outline(str(path))
+    by_h = {i["heading"]: i for i in items}
+    assert "Literature Review" in by_h
+    kp = by_h["Literature Review"]["key_points"]
+    assert "Intro sentence" in kp
+    assert "Platformization" in kp
+    assert "Gig economy" in kp
+    assert "Theme" in kp
+    assert "Wrap up" in by_h["Conclusion"]["key_points"]
+    assert "Platformization" not in by_h["Conclusion"]["key_points"]
+
+
 def test_placeholder_summary_truncates():
     long = "x" * 5000
     out = placeholder_summary(long, max_len=100)
@@ -72,6 +99,48 @@ def test_ingest_paste_and_markdown_bytes(tmp_path: Path):
     pasted = document_ingest_service.ingest_paste("hello world", title="t")
     assert pasted.raw_text == "hello world"
     assert pasted.title == "t"
+
+
+def test_ingest_word_template_dotx_content_type(tmp_path: Path):
+    """扩展名为 .docx 但 ContentType 是 template.main 时也应能入库。"""
+    import zipfile
+    from io import BytesIO
+
+    # 造一个最小「模板类型」docx：先写正常文档，再改 Content_Types
+    normal = tmp_path / "normal.docx"
+    doc = Document()
+    doc.add_heading("Chapter From Template", level=1)
+    doc.add_paragraph("Body under heading.")
+    doc.save(str(normal))
+
+    tmpl = tmp_path / "as_template.docx"
+    buf = BytesIO()
+    with zipfile.ZipFile(normal, "r") as zin, zipfile.ZipFile(buf, "w") as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                text = data.decode("utf-8").replace(
+                    "wordprocessingml.document.main+xml",
+                    "wordprocessingml.template.main+xml",
+                )
+                data = text.encode("utf-8")
+            zout.writestr(info.filename, data)
+    tmpl.write_bytes(buf.getvalue())
+
+    # 未规范化前 Document 应失败
+    try:
+        Document(str(tmpl))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+    result = document_ingest_service.ingest_bytes(
+        tmpl.read_bytes(), filename="outline.docx", project_id=None
+    )
+    assert "Chapter From Template" in result.raw_text
+    items = parse_docx_outline(result.storage_path)
+    assert items[0]["heading"] == "Chapter From Template"
 
 
 def test_docx_table_only_extracts_text(tmp_path: Path):
@@ -100,3 +169,21 @@ def test_ingest_table_docx_succeeds(tmp_path: Path):
         path.read_bytes(), filename="rubric.docx", project_id=None
     )
     assert "Background of the industry" in result.raw_text
+
+
+def test_ingest_pptx_extracts_slides(tmp_path: Path):
+    from pptx import Presentation
+
+    path = tmp_path / "notes.pptx"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Platformization"
+    slide.placeholders[1].text = "Key claim about delivery apps."
+    slide.notes_slide.notes_text_frame.text = "Remember AUT context."
+    prs.save(str(path))
+    result = document_ingest_service.ingest_bytes(
+        path.read_bytes(), filename="notes.pptx", project_id=None
+    )
+    assert "Platformization" in result.raw_text
+    assert "delivery apps" in result.raw_text
+    assert "AUT context" in result.raw_text

@@ -62,6 +62,8 @@ class Project(Base):
         DateTime(timezone=True), nullable=True
     )
     specific_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 确认精修工作区后持久化的跨节 Facts（供下次精修 / run-agent）
+    confirmed_facts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     zotero_collection_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # 本项目启用的检索库 id 列表，如 ["ieee","acm"]；空则用全局默认
     literature_databases: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
@@ -82,6 +84,12 @@ class Project(Base):
     )
     draft_versions: Mapped[List["DraftVersion"]] = relationship(
         "DraftVersion", back_populates="project", cascade="all, delete-orphan"
+    )
+    draft_workings: Mapped[List["DraftWorking"]] = relationship(
+        "DraftWorking", back_populates="project", cascade="all, delete-orphan"
+    )
+    section_directives: Mapped[List["SectionDirective"]] = relationship(
+        "SectionDirective", back_populates="project", cascade="all, delete-orphan"
     )
 
 
@@ -165,9 +173,20 @@ class DraftVersion(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
+    # 全局递增排序键（1,2,3…）
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 展示用 major.minor（9 / 9.1）；旧行可空，读取时回退 version_number
+    major: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("draft_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    base_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("draft_versions.id", ondelete="SET NULL"), nullable=True
+    )
     content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
     apa_references_block: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # AGENT_GEN | MANUAL_IMPORT | POLISH_CONFIRM
     source_type: Mapped[str] = mapped_column(String(20), default="AGENT_GEN")
     changelog: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -175,3 +194,74 @@ class DraftVersion(Base):
     )
 
     project: Mapped["Project"] = relationship("Project", back_populates="draft_versions")
+
+
+class DraftWorking(Base):
+    """精修工作区（每项目至多一个 ACTIVE）。确认后生成 minor 版本。"""
+
+    __tablename__ = "draft_workings"
+    __table_args__ = (Index("ix_draft_workings_project_status", "project_id", "status"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    base_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("draft_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    # { heading: section_markdown } — P2 节精修写入；P0 可为空
+    section_overrides: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # 暂存章节指令，确认时再持久化（P2/P3）
+    pending_directives: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # 工作区已定事实（case / 主张等），精修跨节注入
+    working_facts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 上游变更后建议再精修的下游 heading 列表
+    stale_headings: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    source_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project"] = relationship("Project", back_populates="draft_workings")
+
+
+class SectionDirective(Base):
+    """章节精修指令（确认工作区时由 pending 落库；run-agent 按节注入）。"""
+
+    __tablename__ = "section_directives"
+    __table_args__ = (
+        Index("ix_section_directives_project_heading", "project_id", "outline_heading"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    outline_heading: Mapped[str] = mapped_column(String(500), nullable=False)
+    directive_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # 原始用户短指令（可选，便于展示）
+    instruction: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_working_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("draft_workings.id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("draft_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project"] = relationship("Project", back_populates="section_directives")

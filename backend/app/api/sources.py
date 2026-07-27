@@ -265,13 +265,33 @@ async def delete_source(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """删除源文档；若为 A/D 则刷新定稿。"""
+    """删除源文档；若为 A/D 则刷新定稿；删光 C 则清空已锁大纲。"""
     doc = await _get_owned_source(project_id, source_id, current_user, db)
     role = doc.role
     await db.delete(doc)
     await db.flush()
     if role in {"ASSESSMENT", "SPECIFIC"}:
         await refresh_project_assembled_fields(db, project_id)
+    elif role == "OUTLINE":
+        remaining = await db.execute(
+            select(ProjectSourceDocument.id).where(
+                ProjectSourceDocument.project_id == project_id,
+                ProjectSourceDocument.role == "OUTLINE",
+            ).limit(1)
+        )
+        if remaining.scalar_one_or_none() is None:
+            project = await _get_owned_project(project_id, current_user, db)
+            project.paper_outline = None
+            project.outline_locked_at = None
+            if project.status == "OUTLINE_LOCKED":
+                # 回退到有 A 则为 ASSESSMENT_READY，否则保持原状由前端展示
+                project.status = (
+                    "ASSESSMENT_READY"
+                    if (project.assessment_summary and project.assessment_summary.strip())
+                    else "CREATED"
+                )
+            project.updated_at = datetime.now(timezone.utc)
+            await db.flush()
 
 
 @router.post(

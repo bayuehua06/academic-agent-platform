@@ -98,8 +98,21 @@ def search_literature(state: AcademicAgentState) -> AcademicAgentState:
     """Literature Searcher：关键词优先来自 A，并并入 C 各节标题。"""
     logger.info("Agent step: search_literature (project=%s)", state.get("project_id"))
 
-    if state.get("skip_search") and state.get("sources"):
-        return {**state, "current_step": "search_literature"}
+    # 写作入口一律 skip_search：只用 Zotero/本地已确认文献。
+    # 注意：sources=[] 在 Python 里是 falsy，绝不能写成
+    # `skip_search and sources`，否则空库会误走 mock，造出假文献。
+    if state.get("skip_search"):
+        sources = list(state.get("sources") or [])
+        logger.info(
+            "skip_search=True，跳过检索/mock；沿用已有文献 %s 篇",
+            len(sources),
+        )
+        return {
+            **state,
+            "sources": sources,
+            "current_step": "search_literature",
+            "error": None,
+        }
 
     keywords = list(state.get("keywords") or [])
     for section in state.get("paper_outline") or []:
@@ -113,6 +126,10 @@ def search_literature(state: AcademicAgentState) -> AcademicAgentState:
         keywords = ["academic research"]
 
     max_papers = int(state.get("max_papers") or 5)
+    logger.warning(
+        "未 skip_search，将走检索（当前生产 run-agent 不应走到这里）；keywords=%s",
+        keywords[:8],
+    )
     sources = _search_with_browser(keywords, max_papers)
     sources = _sync_zotero(sources, state.get("zotero_collection_id"))
 

@@ -1,6 +1,6 @@
 {
   "name": "academic-agent-platform",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "private": true,
   "description": "Academic Agent Platform — frontend + backend monorepo scripts",
   "scripts": {

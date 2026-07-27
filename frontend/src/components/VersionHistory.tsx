@@ -28,7 +28,7 @@ export function VersionHistory({ versions, selectedId, onSelect }: Props) {
             }`}
           >
             <div className="flex justify-between">
-              <span className="font-medium">v{v.version_number}</span>
+              <span className="font-medium">v{v.display_label || v.version_number}</span>
               <span className="text-xs text-stone-500">{v.source_type}</span>
             </div>
             <p className="mt-0.5 text-xs text-stone-500">{formatDate(v.created_at)}</p>

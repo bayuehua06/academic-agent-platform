@@ -47,6 +47,31 @@ function buildChapters(outline: OutlineItem[] | null | undefined): Chapter[] {
   return list;
 }
 
+function skippedStorageKey(projectId: string): string {
+  return `lit-wizard-skipped:${projectId}`;
+}
+
+function loadSkippedHeadings(projectId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(skippedStorageKey(projectId));
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x): x is string => typeof x === "string" && x.trim()));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSkippedHeadings(projectId: string, headings: Set<string>) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    skippedStorageKey(projectId),
+    JSON.stringify(Array.from(headings)),
+  );
+}
+
 export function LiteratureConfirmPanel({
   projectId,
   project,
@@ -72,7 +97,33 @@ export function LiteratureConfirmPanel({
     return map;
   }, [literatures]);
 
-  const doneCount = chapters.filter((c) => (confirmedByHeading.get(c.heading) || 0) > 0).length;
+  const confirmedLitCount = literatures.filter(
+    (l) => l.confirmed_at && l.selected_for_draft,
+  ).length;
+
+  const [skippedHeadings, setSkippedHeadings] = useState<Set<string>>(
+    () => loadSkippedHeadings(projectId),
+  );
+
+  // 项目切换时重载「已跳过」；有文献的章自动取消跳过标记
+  useEffect(() => {
+    const loaded = loadSkippedHeadings(projectId);
+    for (const [heading, count] of confirmedByHeading) {
+      if (count > 0) loaded.delete(heading);
+    }
+    setSkippedHeadings(loaded);
+    persistSkippedHeadings(projectId, loaded);
+  }, [projectId, confirmedByHeading]);
+
+  const withLitCount = chapters.filter(
+    (c) => (confirmedByHeading.get(c.heading) || 0) > 0,
+  ).length;
+  const skippedCount = chapters.filter(
+    (c) =>
+      skippedHeadings.has(c.heading) && !(confirmedByHeading.get(c.heading) || 0),
+  ).length;
+  const reviewedCount = withLitCount + skippedCount;
+  const wizardDone = chapters.length > 0 && reviewedCount >= chapters.length;
 
   const [step, setStep] = useState(0);
   const [query, setQuery] = useState("");
@@ -173,6 +224,30 @@ export function LiteratureConfirmPanel({
   function goChapter(index: number) {
     if (index < 0 || index >= chapters.length) return;
     setStep(index);
+  }
+
+  /** 标记本章不需检索入库；非末章进下一章，末章结束向导。 */
+  function skipCurrentChapter() {
+    if (!heading) return;
+    setSkippedHeadings((prev) => {
+      const next = new Set(prev);
+      next.add(heading);
+      persistSkippedHeadings(projectId, next);
+      return next;
+    });
+    setRun(null);
+    setSelected(new Set());
+    if (step < chapters.length - 1) {
+      const nextHeading = chapters[step + 1]?.heading || "";
+      setStep((s) => s + 1);
+      onMessage(`已跳过「${heading}」（不检索）。进入「${nextHeading}」`);
+      return;
+    }
+    onMessage(
+      confirmedLitCount > 0
+        ? `已跳过「${heading}」。向导走完；可到 Draft 跑 Agent（已有 ${confirmedLitCount} 篇入库文献）。`
+        : `已跳过「${heading}」。向导走完；可零文献直接到 Draft 跑 Agent（也可稍后补文献再精修）。`,
+    );
   }
 
   function toggleIndex(idx: number) {
@@ -345,6 +420,16 @@ export function LiteratureConfirmPanel({
       onMessage(`已入库 ${created.length} 篇到章节「${run.outline_heading}」`);
       setSelected(new Set());
       setRun(null);
+      // 入库后取消该章「跳过」标记
+      if (run.outline_heading) {
+        setSkippedHeadings((prev) => {
+          if (!prev.has(run.outline_heading)) return prev;
+          const next = new Set(prev);
+          next.delete(run.outline_heading);
+          persistSkippedHeadings(projectId, next);
+          return next;
+        });
+      }
       await onReload();
       if (step < chapters.length - 1) {
         setStep((s) => s + 1);
@@ -367,16 +452,19 @@ export function LiteratureConfirmPanel({
           <div>
             <h2 className="font-display text-lg font-semibold">按章文献向导</h2>
             <p className="mt-1 text-sm text-stone-500">
-              逐章检索并确认入库。写作前会从 Zotero 项目集合重新拉取（支持离线增补）。
+              逐章检索并确认入库；某章可不检索（「本章不需文献」）。文献可选，允许零文献写作。
             </p>
           </div>
           {outlineReady && (
             <p className="text-sm text-stone-600">
               进度{" "}
               <span className="font-medium text-brand-700">
-                {doneCount}/{chapters.length}
+                {reviewedCount}/{chapters.length}
               </span>{" "}
-              章已有文献
+              章已处理
+              <span className="text-stone-400">
+                （有文献 {withLitCount} · 跳过 {skippedCount}）
+              </span>
             </p>
           )}
         </div>
@@ -387,12 +475,21 @@ export function LiteratureConfirmPanel({
           </p>
         )}
 
+        {outlineReady && wizardDone && (
+          <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {confirmedLitCount > 0
+              ? `向导已走完（入库 ${confirmedLitCount} 篇可选写作）。可到「Draft」跑 Agent。`
+              : "向导已走完（零文献）。可直接到「Draft」跑 Agent；之后仍可补文献再精修。"}
+          </p>
+        )}
+
         {outlineReady && (
           <ol className="flex flex-wrap gap-2">
             {chapters.map((ch, idx) => {
               const count = confirmedByHeading.get(ch.heading) || 0;
               const active = idx === step;
               const done = count > 0;
+              const skipped = !done && skippedHeadings.has(ch.heading);
               return (
                 <li key={ch.heading}>
                   <button
@@ -404,17 +501,23 @@ export function LiteratureConfirmPanel({
                         ? "border-brand-600 bg-brand-50 text-brand-800"
                         : done
                           ? "border-stone-300 bg-stone-50 text-stone-700 hover:border-brand-400"
-                          : "border-stone-200 text-stone-500 hover:border-stone-400"
+                          : skipped
+                            ? "border-dashed border-stone-300 bg-stone-50 text-stone-500 hover:border-stone-400"
+                            : "border-stone-200 text-stone-500 hover:border-stone-400"
                     }`}
                     title={ch.key_points || ch.heading}
                   >
                     <span className="font-medium">
-                      {done ? "✓ " : ""}
+                      {done ? "✓ " : skipped ? "– " : ""}
                       {idx + 1}. {ch.heading}
                     </span>
                     {done ? (
                       <span className="mt-0.5 block text-[10px] text-stone-500">
                         {count} 篇
+                      </span>
+                    ) : skipped ? (
+                      <span className="mt-0.5 block text-[10px] text-stone-400">
+                        已跳过
                       </span>
                     ) : null}
                   </button>
@@ -585,10 +688,11 @@ export function LiteratureConfirmPanel({
             <button
               type="button"
               className="btn-outline"
-              disabled={busy || step >= chapters.length - 1}
-              onClick={() => goChapter(step + 1)}
+              disabled={busy || !heading}
+              onClick={skipCurrentChapter}
+              title="不检索本章；标记为已处理。文献可选，允许零文献写作。"
             >
-              跳过本章
+              {step >= chapters.length - 1 ? "本章不需文献（结束）" : "本章不需文献"}
             </button>
           </div>
         </section>

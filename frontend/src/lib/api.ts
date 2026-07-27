@@ -8,6 +8,7 @@ export type Project = {
   paper_outline?: OutlineItem[] | null;
   outline_locked_at?: string | null;
   specific_requirements?: string | null;
+  confirmed_facts?: string | null;
   zotero_collection_id?: string | null;
   literature_databases?: string[] | null;
   status: string;
@@ -108,11 +109,45 @@ export type DraftVersion = {
   id: string;
   project_id: string;
   version_number: number;
+  major?: number | null;
+  minor?: number;
+  display_label: string;
+  parent_version_id?: string | null;
+  base_version_id?: string | null;
   content_markdown: string;
   apa_references_block?: string | null;
   source_type: string;
   changelog?: string | null;
   created_at: string;
+  citation_warnings?: string[] | null;
+  directives_persisted?: number | null;
+  references_matched?: number | null;
+};
+
+export type DraftWorking = {
+  id: string;
+  project_id: string;
+  base_version_id: string;
+  base_display_label?: string | null;
+  content_markdown: string;
+  section_overrides?: Record<string, string> | null;
+  pending_directives?: unknown[] | null;
+  working_facts?: string | null;
+  stale_headings?: string[] | null;
+  status: string;
+  source_filename?: string | null;
+  created_at: string;
+  updated_at: string;
+  outline_seeds?: Record<string, string> | null;
+  sections?: {
+    heading: string;
+    level: number;
+    status: string;
+    similarity: number;
+    has_locked_blocks: boolean;
+    locked_count: number;
+    polished: boolean;
+  }[];
 };
 
 function getToken(): string | null {
@@ -272,13 +307,13 @@ function filenameFromContentDisposition(header: string | null, fallback: string)
 /** 本地拼下载名：项目名_v版本.ext（与后端 sanitize 规则对齐） */
 export function buildExportFilename(
   title: string | undefined | null,
-  versionNumber: number | undefined | null,
+  versionLabel: string | number | undefined | null,
   format: "docx" | "pdf",
 ): string {
   let cleaned = (title || "draft").trim() || "draft";
   cleaned = cleaned.replace(/[\\/:*?"<>|\r\n\t]+/g, "_").replace(/\s+/g, "_").replace(/_+/g, "_");
   cleaned = cleaned.replace(/^[._]+|[._]+$/g, "").slice(0, 80) || "draft";
-  const ver = versionNumber && versionNumber > 0 ? versionNumber : 1;
+  const ver = String(versionLabel || "1").replace(/[\\/:*?"<>|\s]+/g, "_");
   return `${cleaned}_v${ver}.${format}`;
 }
 

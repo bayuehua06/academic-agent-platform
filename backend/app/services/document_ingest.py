@@ -1,4 +1,4 @@
-"""文档解析入库：粘贴 / 上传（md/docx/pdf/txt）→ raw_text。"""
+"""文档解析入库：粘贴 / 上传（md/docx/pdf/pptx/txt）→ raw_text。"""
 
 from __future__ import annotations
 
@@ -141,11 +141,28 @@ class DocumentIngestService:
         if suffix in {".md", ".markdown", ".txt"} or "markdown" in ctype or ctype.startswith("text/"):
             return path.read_text(encoding="utf-8", errors="replace")
 
-        if suffix == ".docx" or "wordprocessingml" in ctype:
-            return pandoc_service.docx_to_markdown(path)
+        if suffix in {".docx", ".dotx", ".docm", ".dotm"} or "wordprocessingml" in ctype:
+            from app.services.word_package import (
+                friendly_docx_open_error,
+                normalize_word_package_inplace,
+            )
+
+            normalize_word_package_inplace(path)
+            try:
+                return pandoc_service.docx_to_markdown(path)
+            except ValueError as exc:
+                raise ValueError(
+                    friendly_docx_open_error(exc, filename or path.name)
+                ) from exc
 
         if suffix == ".pdf" or ctype == "application/pdf":
             return self._extract_pdf(path)
+
+        if suffix == ".pptx" or "presentationml.presentation" in ctype:
+            return self._extract_pptx(path)
+
+        if suffix == ".ppt":
+            raise ValueError("暂不支持旧版 .ppt，请另存为 .pptx 后上传")
 
         # 兜底尝试 utf-8
         try:
@@ -165,6 +182,57 @@ class DocumentIngestService:
             text = page.extract_text() or ""
             if text.strip():
                 parts.append(text.strip())
+        return sanitize_extracted_text("\n\n".join(parts))
+
+    def _extract_pptx(self, path: Path) -> str:
+        """提取 PowerPoint (.pptx) 幻灯片文本（含备注）。"""
+        try:
+            from pptx import Presentation
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+        except ImportError as exc:
+            raise ValueError("PPTX 解析需要安装 python-pptx") from exc
+
+        prs = Presentation(str(path))
+        parts: list[str] = []
+
+        def _shape_text(shape) -> list[str]:  # noqa: ANN001
+            chunks: list[str] = []
+            if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+                t = (shape.text_frame.text or "").strip()
+                if t:
+                    chunks.append(t)
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                for child in shape.shapes:
+                    chunks.extend(_shape_text(child))
+            if getattr(shape, "has_table", False) and shape.has_table:
+                rows = []
+                for row in shape.table.rows:
+                    cells = [
+                        (c.text_frame.text or "").strip().replace("|", "\\|")
+                        for c in row.cells
+                    ]
+                    if any(cells):
+                        rows.append("| " + " | ".join(cells) + " |")
+                if rows:
+                    chunks.append("\n".join(rows))
+            return chunks
+
+        for idx, slide in enumerate(prs.slides, start=1):
+            slide_bits: list[str] = [f"## Slide {idx}"]
+            for shape in slide.shapes:
+                slide_bits.extend(_shape_text(shape))
+            if slide.has_notes_slide:
+                notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if notes:
+                    slide_bits.append(f"[Notes]\n{notes}")
+            body = "\n\n".join(b for b in slide_bits[1:] if b.strip())
+            if body.strip():
+                parts.append(f"## Slide {idx}\n\n{body.strip()}")
+            elif len(slide_bits) == 1:
+                continue
+            else:
+                parts.append(slide_bits[0])
+
         return sanitize_extracted_text("\n\n".join(parts))
 
     def _save_upload(
@@ -191,6 +259,8 @@ class DocumentIngestService:
             ".markdown": "text/markdown",
             ".txt": "text/plain",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".dotx": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ".pdf": "application/pdf",
         }
         return mapping.get(suffix.lower(), "application/octet-stream")
