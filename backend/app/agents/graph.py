@@ -63,6 +63,7 @@ def run_academic_workflow(
     existing_sources: Optional[list] = None,
     section_directives: Optional[list] = None,
     confirmed_facts: str = "",
+    available_documents: Optional[list] = None,
 ) -> AcademicAgentState:
     """
     执行完整学术写作工作流。
@@ -92,6 +93,7 @@ def run_academic_workflow(
         "zotero_collection_id": zotero_collection_id,
         "section_directives": list(section_directives or []),
         "confirmed_facts": confirmed_facts or "",
+        "available_documents": list(available_documents or []),
         "error": None,
         "current_step": "start",
     }

@@ -1,6 +1,6 @@
 # OpenAI / LLM 使用说明（统一）
 
-> 版本对齐：**v1.2.1**（含 1.2.0 Z5 / Writer；导出 APA 见 CHANGELOG）· 更新日期：2026-07-26
+> 版本对齐：**v1.3.1**（Writer 结构保真 / A·D 硬约束 / must_apply；精修见 1.3.0）· 更新日期：2026-07-27
 > 配置：`backend/.env` → `OPENAI_API_KEY`、`OPENAI_MODEL`（默认 `gpt-4o-mini`）、`OPENAI_WRITER_MODEL`（默认 `gpt-4o`）  
 > Key **本身免费**；调用按量从 Platform 余额扣费。与 ChatGPT Plus **不是同一套计费**。
 
@@ -86,13 +86,14 @@
 |----|------|
 | 触发 | `POST /api/projects/{id}/run-agent`（有 Key 时） |
 | 模型 | `OPENAI_WRITER_MODEL`（默认 `gpt-4o`）；空则回退 `OPENAI_MODEL`。Summarizer/Z5 仍用 mini |
-| 约束 | 先从 D+A **抽取通用 checklist**（字数/引用/必含/禁止等），失败则规则回退；**原文 D 始终附带** |
+| 约束 | **A 与 D 同级硬约束**抽取 checklist；原文 A/D 均附带；大纲 Seed / 表结构保真 |
+| 套用文档 | A/D 点名 must_apply 时匹配源文档并注入；匹配失败仅警告 |
 | 语言 | **默认学术英文**；仅当约束明确要求中文（或其他语言）时才切换 |
-| 分节 | 每节 + 扩写均带完整 HARD CONSTRAINTS；并附上一节末尾以保持连贯 |
-| 校验 | 成稿后检查字数与 must_include；不达标再补写一轮 |
+| 分节 | 每节 + 偏短扩写 + **偏长压缩**；均带 HARD CONSTRAINTS |
+| 校验 | 字数（超标约 `max×1.1`）、must_include、大纲标题/表；不达标再 repair |
 | 回退 | 无 Key / 全节失败 → 模板；changelog 含 model / words / target / verify_ok |
 
-> 字数只是 checklist 的一项，不是唯一目标。
+> 字数是硬目标之一，但不得牺牲表格与 A/D 硬要求；页数不做硬校验。
 
 ---
 
@@ -131,9 +132,10 @@ OPENAI_WRITER_MODEL=gpt-4o
 |------|------|
 | `backend/app/services/summarizer.py` | 源文档摘要 / A 合并 |
 | `backend/app/services/literature_query.py` | Z5 检索词 |
-| `backend/app/services/writing_constraints.py` | D/A 约束抽取与成稿校验 |
+| `backend/app/services/writing_constraints.py` | A/D 同级约束抽取、must_apply、成稿校验 |
+| `backend/app/services/structure_guard.py` | 大纲标题 / Seed 表保真校验 |
 | `backend/app/services/llm_client.py` | 共用 Chat；`purpose=writer` 走 Writer 模型 |
-| `backend/app/agents/nodes/writer.py` | 分节写作 / 扩写 / 补写 |
+| `backend/app/agents/nodes/writer.py` | 分节写作 / 扩写 / 压缩 / 结构 repair |
 | `backend/app/api/literature_search.py` | `suggest-query` |
 | `backend/app/api/sources.py` | 创建/上传/reparse/summarize |
 | `backend/app/core/config.py` | `openai_api_key` / `openai_model` / `openai_writer_model` |

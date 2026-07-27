@@ -16,10 +16,13 @@ from app.services.citation_guard import (
 )
 from app.services.llm_client import resolve_model, safe_invoke_chat
 from app.services.pandoc_service import strip_references_section
+from app.services.structure_guard import format_table_seed_hint
 from app.services.writing_constraints import (
     WritingConstraints,
+    bind_must_apply_documents,
     count_words,
     extract_writing_constraints,
+    format_must_apply_block,
     parse_word_target,
     verify_draft_against_constraints,
 )
@@ -34,18 +37,22 @@ _SECTION_SYSTEM = (
     "You are an academic writing assistant. Write ONE section of a scholarly paper "
     "in Markdown (APA 7th in-text citations only unless HARD CONSTRAINTS say otherwise).\n"
     f"{CITATION_HARD_RULES}\n"
-    "Other hard rules:\n"
+    "Other hard rules (priority: structure & Assessment/Specific over fluency):\n"
     "- DEFAULT LANGUAGE: academic English. Only write Chinese (or another language) "
     "if HARD CONSTRAINTS explicitly require it.\n"
-    "- Output ONLY this section: the given heading line, then body paragraphs.\n"
+    "- Output ONLY this section: the given heading line, then body.\n"
     "- Do NOT write other sections, a title page, or a References list.\n"
-    "- Obey the HARD CONSTRAINTS block completely (length, style, must-include, must-avoid, language, etc.).\n"
-    "- OUTLINE SEED (authoritative): the key_points from the locked paper outline are "
-    "binding. You MUST incorporate named cases, proposal titles, and given facts. "
-    "Do NOT invent a conflicting case study or rename the user's proposals.\n"
+    "- Do NOT change the outline heading text or invent sibling sections.\n"
+    "- STRUCTURE FIDELITY: If OUTLINE SEED contains a Markdown table framework, you MUST "
+    "keep an isomorphic Markdown pipe table (same columns/headers); fill cells as needed. "
+    "Never replace a required table with prose-only paragraphs.\n"
+    "- Obey HARD CONSTRAINTS completely. Assessment (grading) and Specific requirements "
+    "are co-equal and binding. MUST APPLY documents override soft background notes.\n"
+    "- OUTLINE SEED (authoritative): named cases, proposal titles, and given facts MUST "
+    "be used. Do NOT invent a conflicting case study or rename the user's proposals.\n"
     "- Obey SECTION DIRECTIVES and CONFIRMED FACTS when provided (from prior polish).\n"
-    "- Hit the target word count for THIS section (±15%) with substantive analysis "
-    "(define concepts, compare ALLOWED SOURCES when present, address key_points)—not filler.\n"
+    "- Hit the target word count for THIS section (±15%) WITHOUT sacrificing tables, "
+    "headings, or hard requirements. Prefer cutting fluff over dropping structure.\n"
     "- Stay consistent with the previous-section summary when provided."
 )
 
@@ -209,34 +216,51 @@ def _write_section_llm(
     previous_summary: str,
     section_directives: str = "",
     confirmed_facts: str = "",
+    must_apply_block: str = "",
 ) -> Optional[str]:
     heading = section.get("heading") or f"Section {section_index + 1}"
     level = int(section.get("level") or 1)
     key_points = (section.get("key_points") or "").strip()
     lo, hi = constraints.word_target()
-    user = (
-        f"{constraints.to_prompt_block()}\n\n"
-        f"This is section {section_index + 1} of {section_count}.\n"
-        f"Overall paper length target: {lo}-{hi} English words.\n"
-        f"TARGET FOR THIS SECTION ONLY: about {word_target} English words "
-        f"(acceptable {int(word_target * 0.85)}-{int(word_target * 1.15)}).\n\n"
-        f"Section heading (Markdown level {level}): {_heading_md(level, heading)}\n"
-        f"OUTLINE SEED / key_points (authoritative — must use, do not contradict):\n"
-        f"{key_points or '(none)'}\n\n"
-        f"CONFIRMED FACTS (from prior polish — stay consistent):\n"
-        f"{confirmed_facts.strip() or '(none)'}\n\n"
-        f"SECTION DIRECTIVES (from prior polish — obey when regenerating this section):\n"
-        f"{section_directives.strip() or '(none)'}\n\n"
-        f"Previous section ending (for continuity):\n{previous_summary}\n\n"
-        f"Assessment summary (excerpt):\n{assessment[:2000] or '(none)'}\n\n"
-        f"Background notes (excerpt):\n{backgrounds[:1800] or '(none)'}\n\n"
-        f"{_format_sources_for_prompt(sources)}\n"
+    table_hint = format_table_seed_hint(key_points)
+    parts = [
+        constraints.to_prompt_block(),
+    ]
+    if must_apply_block.strip():
+        parts.append(must_apply_block.strip())
+    parts.extend(
+        [
+            f"This is section {section_index + 1} of {section_count}.",
+            f"Overall paper length target: {lo}-{hi} English words.",
+            f"TARGET FOR THIS SECTION ONLY: about {word_target} English words "
+            f"(acceptable {int(word_target * 0.85)}-{int(word_target * 1.15)}). "
+            "Do not pad past the overall max.",
+            f"Section heading (Markdown level {level}): {_heading_md(level, heading)}",
+            "OUTLINE SEED / key_points (authoritative — must use, do not contradict):\n"
+            f"{key_points or '(none)'}",
+        ]
     )
+    if table_hint:
+        parts.append(table_hint.strip())
+    parts.extend(
+        [
+            f"CONFIRMED FACTS (from prior polish — stay consistent):\n"
+            f"{confirmed_facts.strip() or '(none)'}",
+            f"SECTION DIRECTIVES (from prior polish — obey when regenerating this section):\n"
+            f"{section_directives.strip() or '(none)'}",
+            f"Previous section ending (for continuity):\n{previous_summary}",
+            "Assessment / grading (HARD — already in HARD CONSTRAINTS; excerpt for focus):\n"
+            f"{assessment[:2500] or '(none)'}",
+            f"Background notes (SOFT reference only):\n{backgrounds[:1800] or '(none)'}",
+            _format_sources_for_prompt(sources),
+        ]
+    )
+    user = "\n\n".join(parts) + "\n"
     return safe_invoke_chat(
         _SECTION_SYSTEM,
         user,
         temperature=0.45,
-        max_input=16000,
+        max_input=18000,
         max_tokens=_section_max_tokens(word_target),
         purpose="writer",
     )
@@ -255,18 +279,21 @@ def _expand_section_if_short(
     if words >= int(word_target * 0.75):
         return body
     need = max(120, word_target - words)
+    kp = (section.get("key_points") or "").strip()
+    table_hint = format_table_seed_hint(kp)
     expand = safe_invoke_chat(
         (
             "Expand the academic Markdown section below. Keep the same heading. "
             f"{CITATION_HARD_RULES}\n"
-            "Obey HARD CONSTRAINTS. DEFAULT language is English unless constraints "
-            "explicitly require otherwise. Add substantive analysis; cite ONLY ALLOWED "
-            "SOURCES (or use zero citations if NONE). Output the full section."
+            "Obey HARD CONSTRAINTS. Preserve any Markdown tables. DEFAULT language is English "
+            "unless constraints explicitly require otherwise. Add substantive analysis; cite ONLY "
+            "ALLOWED SOURCES (or use zero citations if NONE). Output the full section."
         ),
         (
             f"{constraints.to_prompt_block()}\n\n"
+            f"{table_hint}\n"
             f"Current section (~{words} words) must grow by about {need} words "
-            f"toward ~{word_target} words.\n\n"
+            f"toward ~{word_target} words without dropping tables.\n\n"
             f"{_format_sources_for_prompt(sources)}\n\n"
             f"Section to expand:\n{body}\n"
         ),
@@ -281,30 +308,90 @@ def _expand_section_if_short(
     return body
 
 
+def _compress_section_if_long(
+    body: str,
+    *,
+    section: OutlineSection,
+    word_target: int,
+    constraints: WritingConstraints,
+    sources: list,
+) -> str:
+    """偏长则压缩；保留表与标题。"""
+    words = count_words(body)
+    if words <= int(word_target * 1.20):
+        return body
+    kp = (section.get("key_points") or "").strip()
+    table_hint = format_table_seed_hint(kp)
+    compressed = safe_invoke_chat(
+        (
+            "Compress the academic Markdown section below. Keep the same heading. "
+            f"{CITATION_HARD_RULES}\n"
+            "Obey HARD CONSTRAINTS. MUST preserve Markdown tables and column structure. "
+            "Cut fluff and repetition; do not drop rubric must-includes. Output the full section."
+        ),
+        (
+            f"{constraints.to_prompt_block()}\n\n"
+            f"{table_hint}\n"
+            f"Current section (~{words} words) must shrink toward ~{word_target} words "
+            f"(acceptable up to {int(word_target * 1.15)}).\n\n"
+            f"{_format_sources_for_prompt(sources)}\n\n"
+            f"Section to compress:\n{body}\n"
+        ),
+        temperature=0.3,
+        max_input=14000,
+        max_tokens=_section_max_tokens(word_target),
+        purpose="writer",
+    )
+    if compressed and count_words(compressed) < words:
+        cleaned, _ = sanitize_citations(_ensure_heading(compressed, section), sources)
+        return cleaned
+    return body
+
+
 def _repair_draft_if_needed(
     draft: str,
     *,
     constraints: WritingConstraints,
     sources: list,
     verification: dict,
+    paper_outline: Optional[list] = None,
+    must_apply_block: str = "",
 ) -> str:
-    """对照 checklist / 字数做一轮补写。"""
+    """对照 checklist / 字数 / 结构做一轮补写或压短。"""
     if verification.get("ok"):
         return draft
-    issues = verification.get("issues") or []
+    issues = list(verification.get("issues") or [])
+    structure = verification.get("structure") or {}
+    missing_tables = structure.get("missing_tables") or []
+    structure_focus = ""
+    if missing_tables:
+        structure_focus = (
+            "CRITICAL STRUCTURE FIX: Restore Markdown tables for these sections from "
+            f"OUTLINE SEED: {', '.join(missing_tables)}. Same columns/headers required.\n"
+        )
+    high = any("too high" in (i or "").lower() for i in issues)
     repaired = safe_invoke_chat(
         (
-            "You revise an academic Markdown draft to satisfy unmet HARD CONSTRAINTS. "
+            "You revise an academic Markdown draft to satisfy unmet HARD CONSTRAINTS "
+            "and OUTLINE STRUCTURE. "
             f"{CITATION_HARD_RULES}\n"
-            "Keep the same outline headings. Cite ONLY ALLOWED SOURCES "
-            "(or zero citations if NONE). "
+            "Keep the same outline headings (do not rename/merge/drop sections). "
+            "Preserve or restore required Markdown tables. "
+            "Cite ONLY ALLOWED SOURCES (or zero citations if NONE). "
             "DEFAULT language is English unless HARD CONSTRAINTS explicitly require another language. "
             "Do not add a References list. Output the full revised Markdown draft."
         ),
         (
             f"{constraints.to_prompt_block()}\n\n"
+            f"{must_apply_block}\n\n"
+            f"{structure_focus}"
             f"Unmet issues:\n- " + "\n- ".join(issues) + "\n\n"
-            f"{_format_sources_for_prompt(sources)}\n\n"
+            + (
+                "Prefer COMPRESSING length while keeping tables and hard requirements.\n\n"
+                if high
+                else ""
+            )
+            + f"{_format_sources_for_prompt(sources)}\n\n"
             f"Current draft:\n{draft[:24000]}\n"
         ),
         temperature=0.35,
@@ -312,12 +399,16 @@ def _repair_draft_if_needed(
         max_tokens=12000,
         purpose="writer",
     )
-    if repaired and count_words(repaired) >= int(count_words(draft) * 0.8):
-        logger.info("Writer 成稿补写完成")
-        cleaned, _ = sanitize_citations(repaired.strip() + "\n", sources)
-        return cleaned
-    logger.warning("Writer 成稿补写未采用（失败或过短）")
-    return draft
+    if not repaired:
+        logger.warning("Writer 成稿补写未采用（空返回）")
+        return draft
+    # 过短才拒绝；允许压缩后变短
+    if count_words(repaired) < int(count_words(draft) * 0.55) and not high:
+        logger.warning("Writer 成稿补写未采用（过短）")
+        return draft
+    logger.info("Writer 成稿补写完成")
+    cleaned, _ = sanitize_citations(repaired.strip() + "\n", sources)
+    return cleaned
 
 
 def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: list) -> tuple[Optional[str], WritingConstraints, dict]:
@@ -338,14 +429,26 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
     constraints = extract_writing_constraints(specific=specific, assessment=assessment)
     target_min, target_max = constraints.word_target()
     budgets = allocate_section_words(sections, target_min, target_max)
+
+    available_docs = list(state.get("available_documents") or [])
+    matched_apply, unmatched_apply = bind_must_apply_documents(
+        constraints.must_apply_documents, available_docs
+    )
+    must_apply_block = format_must_apply_block(matched_apply)
+    if unmatched_apply:
+        logger.warning("必须套用文档未匹配到源文档: %s", unmatched_apply)
+
     logger.info(
-        "Writer model=%s constraints_source=%s 字数=%s-%s 分节=%s checklist=%s",
+        "Writer model=%s constraints_source=%s 字数=%s-%s 分节=%s checklist=%s "
+        "must_apply_matched=%s unmatched=%s",
         resolve_model("writer"),
         constraints.source,
         target_min,
         target_max,
         budgets,
         len(constraints.checklist),
+        len(matched_apply),
+        unmatched_apply,
     )
 
     parts: List[str] = [
@@ -369,6 +472,7 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
             previous_summary=_prev_summary(prev),
             section_directives=_directives_for_heading(all_directives, heading),
             confirmed_facts=confirmed_facts,
+            must_apply_block=must_apply_block,
         )
         if not raw:
             logger.warning("Writer 第 %s 节失败，用模板段落占位", i + 1)
@@ -378,6 +482,13 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
             continue
         body = _ensure_heading(raw, section)
         body = _expand_section_if_short(
+            body,
+            section=section,
+            word_target=budgets[i],
+            constraints=constraints,
+            sources=sources,
+        )
+        body = _compress_section_if_long(
             body,
             section=section,
             word_target=budgets[i],
@@ -400,9 +511,24 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
 
     draft = "\n".join(parts).strip() + "\n"
     draft, removed_all = sanitize_citations(draft, sources)
-    # References 由系统按真源重建，正文里若模型自写了则剥掉
     draft = strip_references_section(draft).strip() + "\n"
-    verification = verify_draft_against_constraints(draft, constraints)
+    verification = verify_draft_against_constraints(
+        draft, constraints, paper_outline=sections
+    )
+    if unmatched_apply:
+        issues = list(verification.get("issues") or [])
+        issues.append(
+            "Must-apply documents not found in project sources (warned): "
+            + "; ".join(unmatched_apply[:8])
+        )
+        verification["issues"] = issues
+        # 仅警告，不因未匹配阻断 ok（结构/字数/must_include 仍决定 ok）
+        verification["must_apply_unmatched"] = unmatched_apply
+    verification["must_apply_matched"] = [
+        {"name": m.get("name"), "title": m.get("title"), "role": m.get("role")}
+        for m in matched_apply
+    ]
+
     cite_check = verify_citations(draft, sources)
     if cite_check.get("hallucinated"):
         issues = list(verification.get("issues") or [])
@@ -411,9 +537,9 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
             + "; ".join(cite_check["hallucinated"][:10])
         )
         verification["issues"] = issues
+        verification["ok"] = False
         verification["citation_ok"] = False
         verification["hallucinated_citations"] = cite_check["hallucinated"]
-        # 再清一次（叙述式可能漏）
         draft, _ = sanitize_citations(draft, sources)
     else:
         verification["citation_ok"] = True
@@ -421,18 +547,36 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
     if removed_all:
         verification["stripped_citations"] = removed_all
 
-    if not verification.get("ok"):
+    # 结构/字数/must_include 失败才 repair（未匹配文档仅警告）
+    need_repair = bool(
+        verification.get("missing_must_include")
+        or (verification.get("structure") or {}).get("issues")
+        or any(
+            "word count" in (i or "").lower() for i in (verification.get("issues") or [])
+        )
+    )
+    if need_repair:
         draft = _repair_draft_if_needed(
             draft,
             constraints=constraints,
             sources=sources,
             verification=verification,
+            paper_outline=sections,
+            must_apply_block=must_apply_block,
         )
         draft, _ = sanitize_citations(draft, sources)
-        verification = verify_draft_against_constraints(draft, constraints)
+        verification = verify_draft_against_constraints(
+            draft, constraints, paper_outline=sections
+        )
         cite_check = verify_citations(draft, sources)
         verification["citation_ok"] = cite_check.get("ok", True)
         verification["hallucinated_citations"] = cite_check.get("hallucinated") or []
+        if unmatched_apply:
+            verification["must_apply_unmatched"] = unmatched_apply
+        verification["must_apply_matched"] = [
+            {"name": m.get("name"), "title": m.get("title"), "role": m.get("role")}
+            for m in matched_apply
+        ]
 
     logger.info(
         "Writer 完成：words≈%s target=%s-%s ok=%s citation_ok=%s issues=%s",

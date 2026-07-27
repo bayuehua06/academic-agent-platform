@@ -2,6 +2,40 @@
 
 本文件记录 Academic Agent Platform 的版本与功能变更摘要（功能 / API / 组件 / 数据库）。详细实现见 `docs/`。
 
+## [1.3.1] - 2026-07-27
+
+### 新增 / 变更
+
+- **Writer 输入优先级（W1–W4）**：大纲结构/表格保真；A（评分）与 D 同为硬约束；字数超长压缩 + 更紧容差；D/A「必须套用文档」绑定注入
+- **结构护栏**：Seed 含 Markdown 表时，成稿校验缺表/缺标题并专项 repair；精修提示同步强调保表
+- **页数**：明确为弱信号，不做硬校验（长度请用词数写在 D）
+
+### API
+
+- `POST .../run-agent`：行为增强（无新路径）— 注入项目源文档目录供 must_apply 匹配；Writer 校验含结构 / 字数 / must_include；未匹配套用文档写入 verification 警告（不阻断）
+
+### 组件 / 服务
+
+- 新增 `structure_guard.py`
+- `writing_constraints.py`：A/D 同级抽取、`must_apply_documents`、字数 `hi×1.1` 报警
+- `writer.py`：表硬提示、节内压缩、结构 repair、MUST APPLY 块
+- `draft_polish.py`：表保真提示
+
+### 数据库
+
+- 无 schema 变更（服务层能力）
+
+### 文档
+
+- 更新 README、`api_reference`、`database_schema`、`implementation_status`
+- `docs/20260727-writer-input-priority-discussion.md` 标记已入 **1.3.1**
+
+### 已知限制（本版本）
+
+- 页数仍不硬校验；must_apply 匹配失败仅警告
+- 表「同构」以列数近似为主，非出版级版式
+- PDF 导出仍依赖系统 pandoc；内嵌图 OCR 未做
+
 ## [1.3.0] - 2026-07-27
 
 ### 新增 / 变更

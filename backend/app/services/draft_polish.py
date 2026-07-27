@@ -16,6 +16,7 @@ from app.services.draft_sections import (
     restore_locked_blocks,
     split_markdown_sections,
 )
+from app.services.structure_guard import format_table_seed_hint
 from app.services.llm_client import resolve_model, safe_invoke_chat
 from app.services import summarizer as summarizer_module
 
@@ -32,6 +33,9 @@ _POLISH_SYSTEM = (
     "- OUTLINE SEED (authoritative): named cases, proposal titles, and facts from the "
     "locked outline key_points MUST be preserved. Do NOT invent a conflicting case study "
     "or rename the user's proposals unless the user instruction explicitly asks to change them.\n"
+    "- STRUCTURE FIDELITY: If the current section / OUTLINE SEED contains a Markdown table, "
+    "keep an isomorphic pipe table (same columns). Do not replace required tables with prose only "
+    "unless the user instruction explicitly asks to remove the table.\n"
     "- WORKING FACTS and UPSTREAM SUMMARY (when provided) are also binding continuity "
     "constraints—stay consistent with them.\n"
     "- SECTION DIRECTIVES (when provided) come from prior confirmed polish—obey them "
@@ -233,12 +237,19 @@ def polish_section_markdown(
     ]
     if prior_block:
         parts.append(prior_block)
+    seed_hint = format_table_seed_hint(outline_key_points)
     parts.extend(
         [
             seed_block.strip(),
             facts_block.strip(),
             directives_block.strip(),
             upstream_block.strip(),
+        ]
+    )
+    if seed_hint.strip():
+        parts.append(seed_hint.strip())
+    parts.extend(
+        [
             format_sources_for_polish(sources),
             f"Current section (preserve <<LOCKED_n>> tokens):\n{heading_line}\n\n{extracted.editable}",
         ]

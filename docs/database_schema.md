@@ -5,6 +5,7 @@ ORM：SQLAlchemy Async（`backend/app/db/models.py`）。开发环境可用 `cre
 
 扩展：`pgcrypto`（`gen_random_uuid`，见 `backend/app/db/init.sql`）。
 
+> **2026-07-27 / v1.3.1**：无新表；Writer 结构保真 / A·D 硬约束 / must_apply / 字数压缩为服务层（见 `structure_guard`、`writing_constraints`）。  
 > **2026-07-27 / v1.3.0**：`projects.confirmed_facts`；`draft_workings.working_facts` / `stale_headings`；新表 `section_directives`。  
 > **2026-07-27 / v1.2.2**：`draft_versions` 增 major/minor/base/parent；新增 `draft_workings`；引用护栏与空库写作为服务层。  
 > **2026-07-26 / v1.2.1**：无新表；导出文件名与 APA docx 为服务/前端能力。  

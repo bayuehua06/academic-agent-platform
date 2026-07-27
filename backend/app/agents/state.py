@@ -60,3 +60,5 @@ class AcademicAgentState(TypedDict, total=False):
     # P3/M4：确认后的章节指令与跨节 Facts
     section_directives: List[Dict[str, Any]]
     confirmed_facts: str
+    # 项目源文档目录（供 must_apply 绑定）
+    available_documents: List[Dict[str, Any]]

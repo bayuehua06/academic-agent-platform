@@ -1,6 +1,6 @@
 # API Reference
 
-**版本：1.3.0**（2026-07-27）
+**版本：1.3.1**（2026-07-27）
 
 Base URL（开发）：`http://localhost:1976`  
 API 前缀：`/api`  
@@ -31,7 +31,7 @@ API 前缀：`/api`
 | GET | `/api/projects/{project_id}` | 是 | 项目详情（含定稿字段 + `confirmed_facts`） |
 | PATCH | `/api/projects/{project_id}` | 是 | 更新标题 / zotero / 定稿字段等 |
 | DELETE | `/api/projects/{project_id}` | 是 | 删除项目（级联本地 sources / literatures / drafts / directives；不删 Zotero 远端） |
-| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**；**文献可选**。注入 active `section_directives` + `confirmed_facts`。有 Collection 时先 Zotero sync；空库也可写作。→ `DraftVersion`（major+1）。Body: `{ max_papers?, skip_search? }` |
+| POST | `/api/projects/{project_id}/run-agent` | 是 | 运行 LangGraph。需 **A 定稿 + 已锁定 C**；**文献可选**。注入 active `section_directives` + `confirmed_facts`；A/D 同级硬约束；大纲表结构保真；若 A/D 点名必须套用某文档则匹配源文档并注入（匹配失败仅警告）。有 Collection 时先 Zotero sync；空库也可写作。→ `DraftVersion`（major+1）。Body: `{ max_papers?, skip_search? }` |
 | GET | `/api/projects/{project_id}/section-directives` | 是 | 已落库章节指令；Query `active_only?`（默认 true） |
 | PATCH | `/api/projects/{project_id}/section-directives/{id}` | 是 | 编辑 `directive_text` / `instruction` / `active` |
 | DELETE | `/api/projects/{project_id}/section-directives/{id}` | 是 | 软删（`active=false`） |

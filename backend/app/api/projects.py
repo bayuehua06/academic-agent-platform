@@ -296,6 +296,17 @@ async def run_agent(
         for d in dir_result.scalars().all()
     ]
 
+    available_documents = [
+        {
+            "title": d.title or "",
+            "role": d.role or "",
+            "summary_text": (d.summary_text or "")[:12000],
+            "raw_text": (d.raw_text or "")[:12000],
+        }
+        for d in (project.source_documents or [])
+        if d.role in ("BACKGROUND", "ASSESSMENT", "OUTLINE", "SPECIFIC")
+    ]
+
     try:
         project.status = "DRAFTING"
         await db.flush()
@@ -311,6 +322,7 @@ async def run_agent(
             existing_sources=existing_sources,
             section_directives=section_directives,
             confirmed_facts=project.confirmed_facts or "",
+            available_documents=available_documents,
         )
     except Exception as exc:  # noqa: BLE001
         project.status = status_before
