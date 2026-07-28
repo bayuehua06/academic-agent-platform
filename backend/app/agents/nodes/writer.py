@@ -291,121 +291,44 @@ def _write_section_llm(
     )
 
 
-def _compress_section_if_long(
-    body: str,
+def _looks_like_llm_meta_reply(text: str) -> bool:
+    """压缩/扩写模型偶发返回「请提供正文」类元回复，不得写入草稿。"""
+    low = (text or "").lower()
+    if not low.strip():
+        return False
+    needles = (
+        "was not included",
+        "please provide the section",
+        "section to be compressed",
+        "section to be expanded",
+        "provide the markdown section",
+        "i cannot compress",
+        "no section was provided",
+    )
+    return any(n in low for n in needles)
+
+
+def _section_revise_user_prompt(
     *,
-    section: OutlineSection,
-    word_target: int,
     constraints: WritingConstraints,
+    table_hint: str,
+    instruction: str,
     sources: list,
+    heading: str,
+    key_points: str,
+    body: str,
+    section_label: str,
 ) -> str:
-    """偏长则压缩；保留表与标题。"""
-    words = count_words(body)
-    if words <= int(word_target * 1.20):
-        return body
-    kp = (section.get("key_points") or "").strip()
-    table_hint = format_table_seed_hint(kp)
-    user_prompt = (
+    """
+    把待改写正文放在 ALLOWED SOURCES 之前，避免 max_input 从尾部截断时丢掉正文。
+    """
+    return (
         f"{constraints.to_prompt_block()}\n\n"
         f"{table_hint}\n"
-        f"Current section (~{words} words) must shrink toward ~{word_target} words "
-        f"(acceptable up to {int(word_target * 1.15)}).\n\n"
-        f"{_format_sources_for_prompt(sources, heading=section.get('heading') or '', key_points=kp)}\n\n"
-        f"Section to compress:\n{body}\n"
+        f"{instruction}\n\n"
+        f"{section_label}:\n{body}\n\n"
+        f"{_format_sources_for_prompt(sources, heading=heading, key_points=key_points)}\n"
     )
-    max_input = 14000
-    truncated = user_prompt[:max_input]
-    # #region agent log
-    try:
-        import json
-        import time
-        _dbg = {
-            "sessionId": "4a542e",
-            "runId": "pre-fix",
-            "hypothesisId": "H1",
-            "location": "writer.py:_compress_section_if_long",
-            "message": "compress prompt truncation check",
-            "data": {
-                "heading": (section.get("heading") or "")[:120],
-                "word_target": word_target,
-                "body_words": words,
-                "body_chars": len(body or ""),
-                "body_head": (body or "")[:160],
-                "prompt_chars": len(user_prompt),
-                "max_input": max_input,
-                "truncated": len(user_prompt) > max_input,
-                "marker_in_full": "Section to compress:" in user_prompt,
-                "marker_in_trunc": "Section to compress:" in truncated,
-                "body_tail_in_trunc": (body or "")[-80:] in truncated if body else False,
-                "trunc_tail": truncated[-200:],
-                "sources_n": len(sources or []),
-            },
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(
-            "/Users/songchen/github/academic-agent-platform/.cursor/debug-4a542e.log",
-            "a",
-            encoding="utf-8",
-        ) as _f:
-            _f.write(json.dumps(_dbg, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    compressed = safe_invoke_chat(
-        (
-            "Compress the academic Markdown section below. Keep the same heading. "
-            f"{CITATION_HARD_RULES}\n"
-            "Obey HARD CONSTRAINTS. MUST preserve Markdown tables and column structure. "
-            "Cut fluff and repetition; do not drop rubric must-includes. Output the full section."
-        ),
-        user_prompt,
-        temperature=0.3,
-        max_input=max_input,
-        max_tokens=_section_max_tokens(word_target),
-        purpose="writer",
-    )
-    # #region agent log
-    try:
-        import json
-        import time
-        _meta = False
-        _low = (compressed or "").lower()
-        if compressed and (
-            "was not included" in _low
-            or "please provide the section" in _low
-            or "section to be compressed" in _low
-        ):
-            _meta = True
-        _dbg2 = {
-            "sessionId": "4a542e",
-            "runId": "pre-fix",
-            "hypothesisId": "H3",
-            "location": "writer.py:_compress_section_if_long:after",
-            "message": "compress LLM result",
-            "data": {
-                "heading": (section.get("heading") or "")[:120],
-                "in_words": words,
-                "out_words": count_words(compressed or ""),
-                "out_chars": len(compressed or ""),
-                "out_head": (compressed or "")[:220],
-                "looks_like_meta": _meta,
-                "will_accept": bool(compressed and count_words(compressed) < words),
-            },
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(
-            "/Users/songchen/github/academic-agent-platform/.cursor/debug-4a542e.log",
-            "a",
-            encoding="utf-8",
-        ) as _f:
-            _f.write(json.dumps(_dbg2, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    if compressed and count_words(compressed) < words:
-        cleaned, _ = sanitize_citations(_ensure_heading(compressed, section), sources)
-        return cleaned
-    return body
 
 
 def _expand_section_if_short(
@@ -422,44 +345,21 @@ def _expand_section_if_short(
         return body
     need = max(120, word_target - words)
     kp = (section.get("key_points") or "").strip()
+    heading = section.get("heading") or ""
     table_hint = format_table_seed_hint(kp)
-    user_prompt = (
-        f"{constraints.to_prompt_block()}\n\n"
-        f"{table_hint}\n"
-        f"Current section (~{words} words) must grow by about {need} words "
-        f"toward ~{word_target} words without dropping tables.\n\n"
-        f"{_format_sources_for_prompt(sources, heading=section.get('heading') or '', key_points=kp)}\n\n"
-        f"Section to expand:\n{body}\n"
+    user_prompt = _section_revise_user_prompt(
+        constraints=constraints,
+        table_hint=table_hint,
+        instruction=(
+            f"Current section (~{words} words) must grow by about {need} words "
+            f"toward ~{word_target} words without dropping tables."
+        ),
+        sources=sources,
+        heading=heading,
+        key_points=kp,
+        body=body,
+        section_label="Section to expand",
     )
-    max_input = 14000
-    # #region agent log
-    try:
-        import json
-        import time
-        _dbg = {
-            "sessionId": "4a542e",
-            "runId": "pre-fix",
-            "hypothesisId": "H5",
-            "location": "writer.py:_expand_section_if_short",
-            "message": "expand prompt truncation check",
-            "data": {
-                "heading": (section.get("heading") or "")[:120],
-                "body_words": words,
-                "prompt_chars": len(user_prompt),
-                "truncated": len(user_prompt) > max_input,
-                "marker_in_trunc": "Section to expand:" in user_prompt[:max_input],
-            },
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(
-            "/Users/songchen/github/academic-agent-platform/.cursor/debug-4a542e.log",
-            "a",
-            encoding="utf-8",
-        ) as _f:
-            _f.write(json.dumps(_dbg, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
     expand = safe_invoke_chat(
         (
             "Expand the academic Markdown section below. Keep the same heading. "
@@ -471,12 +371,67 @@ def _expand_section_if_short(
         ),
         user_prompt,
         temperature=0.4,
-        max_input=max_input,
+        max_input=18000,
         max_tokens=_section_max_tokens(word_target),
         purpose="writer",
     )
-    if expand and count_words(expand) > words:
+    if (
+        expand
+        and not _looks_like_llm_meta_reply(expand)
+        and count_words(expand) > words
+    ):
         cleaned, _removed = sanitize_citations(_ensure_heading(expand, section), sources)
+        return cleaned
+    return body
+
+
+def _compress_section_if_long(
+    body: str,
+    *,
+    section: OutlineSection,
+    word_target: int,
+    constraints: WritingConstraints,
+    sources: list,
+) -> str:
+    """偏长则压缩；保留表与标题。"""
+    words = count_words(body)
+    if words <= int(word_target * 1.20):
+        return body
+    kp = (section.get("key_points") or "").strip()
+    heading = section.get("heading") or ""
+    table_hint = format_table_seed_hint(kp)
+    user_prompt = _section_revise_user_prompt(
+        constraints=constraints,
+        table_hint=table_hint,
+        instruction=(
+            f"Current section (~{words} words) must shrink toward ~{word_target} words "
+            f"(acceptable up to {int(word_target * 1.15)})."
+        ),
+        sources=sources,
+        heading=heading,
+        key_points=kp,
+        body=body,
+        section_label="Section to compress",
+    )
+    compressed = safe_invoke_chat(
+        (
+            "Compress the academic Markdown section below. Keep the same heading. "
+            f"{CITATION_HARD_RULES}\n"
+            "Obey HARD CONSTRAINTS. MUST preserve Markdown tables and column structure. "
+            "Cut fluff and repetition; do not drop rubric must-includes. Output the full section."
+        ),
+        user_prompt,
+        temperature=0.3,
+        max_input=18000,
+        max_tokens=_section_max_tokens(word_target),
+        purpose="writer",
+    )
+    if (
+        compressed
+        and not _looks_like_llm_meta_reply(compressed)
+        and count_words(compressed) < words
+    ):
+        cleaned, _ = sanitize_citations(_ensure_heading(compressed, section), sources)
         return cleaned
     return body
 
@@ -651,45 +606,6 @@ def _write_with_llm(state: AcademicAgentState, paper_outline: list, sources: lis
             constraints=constraints,
             sources=section_sources,
         )
-        # #region agent log
-        try:
-            import json
-            import time
-            from app.services.writing_constraints import count_words as _cw
-            _before = body
-            _bw = _cw(body)
-            _need_c = _bw > int(budgets[i] * 1.20)
-            if _need_c or "background" in heading.lower():
-                with open(
-                    "/Users/songchen/github/academic-agent-platform/.cursor/debug-4a542e.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _f:
-                    _f.write(
-                        json.dumps(
-                            {
-                                "sessionId": "4a542e",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H2",
-                                "location": "writer.py:write_loop_pre_compress",
-                                "message": "section before compress",
-                                "data": {
-                                    "heading": heading[:120],
-                                    "budget": budgets[i],
-                                    "body_words": _bw,
-                                    "will_compress": _need_c,
-                                    "body_chars": len(body or ""),
-                                    "sources_n": len(section_sources or []),
-                                },
-                                "timestamp": int(time.time() * 1000),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-        except Exception:
-            pass
-        # #endregion
         body = _compress_section_if_long(
             body,
             section=section,
