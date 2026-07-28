@@ -179,6 +179,224 @@ def verify_outline_structure(
     }
 
 
+def _normalize_outline_sections(
+    paper_outline: Sequence[Dict[str, Any]] | Sequence[Any],
+) -> List[Dict[str, Any]]:
+    sections: List[Dict[str, Any]] = []
+    for item in paper_outline or []:
+        if isinstance(item, str):
+            h = item.strip()
+            if h:
+                sections.append({"level": 1, "heading": h, "key_points": ""})
+        elif isinstance(item, dict):
+            h = (item.get("heading") or "").strip()
+            if not h:
+                continue
+            sections.append(
+                {
+                    "level": int(item.get("level") or 1),
+                    "heading": h,
+                    "key_points": (item.get("key_points") or "").strip(),
+                }
+            )
+    return sections
+
+
+def force_section_heading(body: str, *, heading: str, level: int = 1) -> str:
+    """
+    强制本节以大纲标题开头：去掉开头错误/多余标题行，再 prepend 正确 heading。
+    """
+    title = (heading or "").strip() or "Section"
+    hashes = "#" * max(1, min(int(level or 1), 6))
+    heading_line = f"{hashes} {title}"
+    text = (body or "").strip()
+    if not text:
+        return heading_line + "\n\n"
+
+    lines = text.splitlines()
+    # 剥离开头连续标题行（中间空行可跳过），直到遇到正文或匹配大纲标题
+    while lines:
+        if not lines[0].strip():
+            lines = lines[1:]
+            continue
+        m = re.match(r"^(#{1,6})\s+(.+?)\s*$", lines[0].strip())
+        if not m:
+            break
+        h = m.group(2).strip()
+        lines = lines[1:]
+        if h.lower() == title.lower():
+            break
+        # 丢弃 Academic Draft / 改写后的错误标题等
+    # 再清掉标题后残留空行
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    rest = "\n".join(lines).strip()
+    if rest:
+        return f"{heading_line}\n\n{rest}\n"
+    return heading_line + "\n\n"
+
+
+def strip_nested_outline_headings(
+    body: str,
+    outline_headings: Sequence[str],
+    *,
+    keep_heading: str,
+) -> str:
+    """
+    从本节正文中去掉「其它大纲标题」及其下属块。
+    防止父节 LLM 输出里夹带子节标题，与后续分节写作重复拼接。
+    """
+    keep = (keep_heading or "").strip().lower()
+    locked = {
+        (h or "").strip().lower()
+        for h in outline_headings
+        if (h or "").strip() and (h or "").strip().lower() != keep
+    }
+    if not locked or not (body or "").strip():
+        return (body or "").strip()
+
+    lines = (body or "").splitlines()
+    out: List[str] = []
+    skip_level: Optional[int] = None
+    for line in lines:
+        m = re.match(r"^(#{1,6})\s+(.+?)\s*$", line.strip())
+        if m:
+            level = len(m.group(1))
+            title = m.group(2).strip().lower()
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            if skip_level is None and title in locked:
+                skip_level = level
+                continue
+            if skip_level is not None:
+                continue
+        elif skip_level is not None:
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _collect_exclusive_outline_bodies(
+    draft: str,
+    sections: Sequence[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """
+    按「任意大纲标题」切分草稿，得到互不重叠的正文块。
+    同一标题出现多次时保留全部（重建时取最后一次，优先分节专写结果）。
+    """
+    titles = {
+        (sec.get("heading") or "").strip().lower()
+        for sec in sections
+        if (sec.get("heading") or "").strip()
+    }
+    if not titles:
+        return {}
+
+    lines = (draft or "").splitlines(keepends=True)
+    cuts: List[Tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if not m:
+            continue
+        key = m.group(2).strip().lower()
+        if key in titles:
+            cuts.append((i, key))
+
+    bodies: Dict[str, List[str]] = {t: [] for t in titles}
+    for ci, (start, key) in enumerate(cuts):
+        end = cuts[ci + 1][0] if ci + 1 < len(cuts) else len(lines)
+        chunk = "".join(lines[start + 1 : end]).strip()
+        bodies.setdefault(key, []).append(chunk)
+    return bodies
+
+
+def rebuild_draft_to_outline(
+    draft: str,
+    paper_outline: Sequence[Dict[str, Any]] | Sequence[Any],
+    *,
+    inject_missing_seed_tables: bool = True,
+) -> str:
+    """
+    按锁定大纲确定性重建标题骨架：顺序/级别/标题文本以大纲为准。
+    找不到的节用占位；缺表时可回填 seed 表框架。
+
+    关键：不得用「同级或更高级标题」作为父节终点（会把子节吞进父节），
+    再按大纲追加子节 → 子节重复；多次 rebuild 会指数叠加。
+    改为按任意大纲标题做互斥切分，同一标题多次出现时取最后一次。
+    """
+    sections = _normalize_outline_sections(paper_outline)
+    if not sections:
+        return (draft or "").strip() + ("\n" if draft else "")
+
+    outline_headings = [sec["heading"] for sec in sections]
+    exclusive = _collect_exclusive_outline_bodies(draft or "", sections)
+
+    parts: List[str] = []
+    for sec in sections:
+        heading = sec["heading"]
+        level = int(sec.get("level") or 1)
+        hashes = "#" * max(1, min(level, 6))
+        key = heading.strip().lower()
+        chunks = exclusive.get(key) or []
+        if chunks:
+            # 分节写作时：父节若误含子标题，专写子节通常在后；取最后一次
+            body = chunks[-1]
+        else:
+            body = (
+                "*(Section restored deterministically: the model draft was missing "
+                "this locked outline heading.)*"
+            )
+
+        body = strip_nested_outline_headings(
+            body, outline_headings, keep_heading=heading
+        )
+
+        kp = sec.get("key_points") or ""
+        if (
+            inject_missing_seed_tables
+            and key_points_has_table(kp)
+            and not extract_seed_tables(body)
+        ):
+            seeds = extract_seed_tables(kp)
+            if seeds:
+                body = ((body + "\n\n") if body else "") + "\n\n".join(seeds)
+
+        if body:
+            parts.append(f"{hashes} {heading}\n\n{body}\n")
+        else:
+            parts.append(f"{hashes} {heading}\n")
+    return "\n".join(parts).strip() + "\n"
+
+
+def format_verification_issues_for_changelog(verification: Optional[Dict[str, Any]]) -> str:
+    """把 writer_verification 压成 changelog 可读片段。"""
+    v = verification or {}
+    chunks: List[str] = []
+    issues = [str(i).strip() for i in (v.get("issues") or []) if str(i).strip()]
+    if issues:
+        joined = " | ".join(issues[:5])
+        if len(joined) > 500:
+            joined = joined[:497] + "..."
+        chunks.append(f"issues={joined}")
+    structure = v.get("structure") or {}
+    missing_h = [str(x) for x in (structure.get("missing_headings") or []) if x]
+    missing_t = [str(x) for x in (structure.get("missing_tables") or []) if x]
+    if missing_h:
+        chunks.append("missing_headings=" + "; ".join(missing_h[:8]))
+    if missing_t:
+        chunks.append("missing_tables=" + "; ".join(missing_t[:8]))
+    missing_mi = [str(x) for x in (v.get("missing_must_include") or []) if x]
+    if missing_mi:
+        chunks.append("missing_must_include=" + "; ".join(missing_mi[:6]))
+    if v.get("citation_ok") is False:
+        hall = v.get("hallucinated_citations") or []
+        if hall:
+            chunks.append("bad_citations=" + "; ".join(str(x) for x in hall[:5]))
+        else:
+            chunks.append("citation_ok=False")
+    return "; ".join(chunks)
+
+
 def format_table_seed_hint(key_points: str) -> str:
     """写入本节 user 提示的表硬要求块。"""
     if not key_points_has_table(key_points):
@@ -188,12 +406,17 @@ def format_table_seed_hint(key_points: str) -> str:
         return (
             "STRUCTURE HARD RULE: This section's OUTLINE SEED implies a table. "
             "You MUST output at least one Markdown pipe table in this section "
-            "(do not replace it with prose only).\n"
+            "(do not replace it with prose only). "
+            "All table headers and cell text MUST be academic English "
+            "(translate any Chinese draft notes; do not leave Chinese in the table).\n"
         )
     blocks = "\n\n".join(f"Seed table framework {i + 1}:\n{t}" for i, t in enumerate(tables[:3]))
     return (
-        "STRUCTURE HARD RULE: Preserve the following Markdown table framework(s). "
-        "Keep the same columns/headers; you may fill cells with content. "
-        "Do NOT convert the table into paragraphs only.\n\n"
+        "STRUCTURE HARD RULE: Preserve the following Markdown table framework(s).\n"
+        "- Keep the same columns and comparable row structure (do NOT replace the table with prose only).\n"
+        "- LANGUAGE: The final table MUST be entirely academic English. "
+        "Chinese (or other non-English) text in the seed is a private draft/hint only — "
+        "TRANSLATE and rewrite it into English; do NOT copy Chinese cells verbatim.\n"
+        "- You may expand/clarify cell content in English while keeping the column layout.\n\n"
         f"{blocks}\n"
     )

@@ -77,7 +77,7 @@ async def test_working_includes_sections_and_polish_accept(auth_client, session_
     _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=1)
     with (
         patch.object(summarizer_module, "has_openai_key", lambda: False),
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
     ):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",
@@ -188,7 +188,7 @@ async def test_working_facts_and_multiturn_polish(auth_client, session_factory):
     _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=1)
     with (
         patch.object(summarizer_module, "has_openai_key", lambda: False),
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
     ):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",

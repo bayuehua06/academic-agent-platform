@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Download, Sparkles, Upload } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentRunOverlay, AgentProgress, AgentRunResult } from "@/components/AgentRunOverlay";
 import { DraftViewer } from "@/components/DraftViewer";
 import { DraftPolishPanel } from "@/components/DraftPolishPanel";
 import { LiteratureConfirmPanel } from "@/components/LiteratureConfirmPanel";
@@ -64,6 +65,26 @@ export default function ProjectDetailPage() {
   const [busy, setBusy] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentProgress, setAgentProgress] = useState<AgentProgress | null>(null);
+  const [agentElapsed, setAgentElapsed] = useState(0);
+  const [repairPrompt, setRepairPrompt] = useState<AgentRunResult | null>(null);
+  const [repairing, setRepairing] = useState(false);
+  const agentPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const agentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopAgentPolling = useCallback(() => {
+    if (agentPollRef.current) {
+      clearInterval(agentPollRef.current);
+      agentPollRef.current = null;
+    }
+    if (agentTimerRef.current) {
+      clearInterval(agentTimerRef.current);
+      agentTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopAgentPolling(), [stopAgentPolling]);
 
   const loadAll = useCallback(async () => {
     const [p, srcs, lits, vers, wrk] = await Promise.all([
@@ -150,20 +171,112 @@ export default function ProjectDetailPage() {
     setBusy(true);
     setError("");
     setMessage("Agent 运行中…");
+    setRepairPrompt(null);
+    setRepairing(false);
+    setAgentRunning(true);
+    setAgentProgress({
+      project_id: projectId,
+      stage: "starting",
+      label: "正在启动学术 Agent…",
+      detail: "随后会同步文献、构建引用证据并分节撰写。校验失败时会先询问是否自动修复。",
+      percent: 5,
+      running: true,
+    });
+    setAgentElapsed(0);
+    stopAgentPolling();
+    const started = Date.now();
+    agentTimerRef.current = setInterval(() => {
+      setAgentElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    agentPollRef.current = setInterval(() => {
+      void apiFetch<AgentProgress>(`/projects/${projectId}/agent-progress`)
+        .then((p) => {
+          if (p?.running || p?.stage === "error") {
+            setAgentProgress(p);
+          }
+        })
+        .catch(() => {
+          /* 轮询失败不打断主请求 */
+        });
+    }, 900);
+
     try {
-      const draft = await apiFetch<DraftVersion>(`/projects/${projectId}/run-agent`, {
+      const draft = await apiFetch<AgentRunResult>(`/projects/${projectId}/run-agent`, {
         method: "POST",
-        body: JSON.stringify({ max_papers: 5, skip_search: true }),
+        body: JSON.stringify({ max_papers: 5, skip_search: true, auto_repair: false }),
       });
-      setMessage(`已生成草稿 v${draft.version_number}`);
       setTab("draft");
       await loadAll();
       setSelectedDraft(draft);
+
+      if (draft.repair_available || draft.verify_ok === false) {
+        stopAgentPolling();
+        setRepairPrompt(draft);
+        setMessage(
+          `已生成草稿 v${draft.display_label || draft.version_number}（校验未通过，等待确认）`,
+        );
+        // 保持浮动层，busy 仍 true，直到用户选择
+        return;
+      }
+
+      setMessage(`已生成草稿 v${draft.display_label || draft.version_number}`);
+      stopAgentPolling();
+      setAgentRunning(false);
+      setAgentProgress(null);
+      setBusy(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent 失败");
-    } finally {
+      stopAgentPolling();
+      setAgentRunning(false);
+      setAgentProgress(null);
       setBusy(false);
     }
+  }
+
+  async function confirmAgentRepair() {
+    if (!repairPrompt) return;
+    setRepairing(true);
+    setError("");
+    setMessage("正在自动修复草稿…");
+    try {
+      const repaired = await apiFetch<AgentRunResult>(
+        `/projects/${projectId}/repair-agent-draft`,
+        {
+          method: "POST",
+          body: JSON.stringify({ version_id: repairPrompt.id }),
+        },
+      );
+      setMessage(
+        `已生成修复版 v${repaired.display_label || repaired.version_number}` +
+          (repaired.verify_ok === false ? "（仍有校验问题，可继续精修）" : ""),
+      );
+      await loadAll();
+      setSelectedDraft(repaired);
+      setTab("draft");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "自动修复失败");
+    } finally {
+      setRepairing(false);
+      setRepairPrompt(null);
+      setAgentRunning(false);
+      setAgentProgress(null);
+      setBusy(false);
+      stopAgentPolling();
+    }
+  }
+
+  function skipAgentRepair() {
+    if (repairPrompt) {
+      setMessage(
+        `已保留草稿 v${repairPrompt.display_label || repairPrompt.version_number}，未做自动修复`,
+      );
+    }
+    setRepairPrompt(null);
+    setRepairing(false);
+    setAgentRunning(false);
+    setAgentProgress(null);
+    setBusy(false);
+    stopAgentPolling();
   }
 
   async function toggleLit(id: string, selected: boolean) {
@@ -307,6 +420,15 @@ export default function ProjectDetailPage() {
 
   return (
     <main className="min-h-screen">
+      <AgentRunOverlay
+        open={agentRunning || Boolean(repairPrompt)}
+        progress={agentProgress}
+        elapsedSec={agentElapsed}
+        repairPrompt={repairPrompt}
+        repairing={repairing}
+        onConfirmRepair={() => void confirmAgentRepair()}
+        onSkipRepair={skipAgentRepair}
+      />
       <header className="border-b border-stone-200 bg-white">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>

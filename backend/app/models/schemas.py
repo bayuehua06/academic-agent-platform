@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -69,6 +69,9 @@ class ProjectOut(BaseModel):
     specific_requirements: Optional[str] = None
     confirmed_facts: Optional[str] = None
     zotero_collection_id: Optional[str] = None
+    zotero_binding_mode: Optional[str] = None
+    zotero_library_type: Optional[str] = None
+    zotero_library_id: Optional[str] = None
     literature_databases: Optional[List[str]] = None
     status: str
     created_at: datetime
@@ -145,10 +148,17 @@ class LiteratureOut(BaseModel):
     year: Optional[str] = None
     doi: Optional[str] = None
     abstract: Optional[str] = None
+    landing_url: Optional[str] = None
+    evidence_tier: Optional[str] = None
+    evidence_source: Optional[str] = None
+    evidence_fetched_at: Optional[datetime] = None
     relevance_score: Optional[float] = None
     selected_for_draft: bool
     confirmed_at: Optional[datetime] = None
     created_at: datetime
+    # 展示/Attach 分配（非 ORM 列，由 API 组装）
+    assigned_headings: List[str] = []
+    collection_path: Optional[str] = None
 
 
 class LiteratureUpdate(BaseModel):
@@ -163,16 +173,42 @@ class LiteratureImportItem(BaseModel):
     authors: Optional[List[str]] = None
     year: Optional[str] = None
     doi: Optional[str] = None
+    url: Optional[str] = None
     abstract: Optional[str] = None
     relevance_score: Optional[float] = None
 
 
 class LiteratureImportRequest(BaseModel):
-    """将确认文献写入 Zotero 章节子集合 + 本地镜像。"""
+    """将确认文献写入 Zotero（create=章节子集合；attach=指定 target）。"""
 
     outline_heading: str
     items: List[LiteratureImportItem]
     source_query: Optional[str] = None
+    # attach 模式必填：绑定根或其直接子集合 key
+    target_collection_key: Optional[str] = None
+
+
+class ZoteroBindingRequest(BaseModel):
+    """绑定项目文献范围：新建结构或挂接已有 Collection。"""
+
+    mode: str = Field(..., pattern="^(create|attach)$")
+    collection_key: Optional[str] = None
+    library_type: Optional[str] = Field(None, pattern="^(user|group)$")
+    library_id: Optional[str] = None
+
+
+class LiteratureAssignmentPut(BaseModel):
+    """整章覆盖该章的文献分配。"""
+
+    literature_ids: List[UUID] = Field(default_factory=list)
+
+
+class LiteratureAssignmentsOut(BaseModel):
+    """按章聚合的分配视图。"""
+
+    sections: List[dict]  # [{outline_heading, literature_ids: [...]}, ...]
+    unassigned_count: int = 0
+    total_count: int = 0
 
 
 # ---------- Drafts ----------
@@ -290,3 +326,34 @@ class AgentRunRequest(BaseModel):
 
     max_papers: int = Field(5, ge=1, le=20)
     skip_search: bool = False
+    # False：校验失败不自动 repair，由前端询问后再调 repair-agent-draft
+    auto_repair: bool = False
+
+
+class AgentRepairRequest(BaseModel):
+    """对已生成草稿做一轮自动补写/压缩。"""
+
+    version_id: UUID
+
+
+class AgentProgressOut(BaseModel):
+    """run-agent 进程内进度（前端轮询）。"""
+
+    project_id: str
+    stage: str
+    label: str
+    detail: str = ""
+    percent: Optional[int] = None
+    updated_at: Optional[str] = None
+    running: bool = False
+
+
+class AgentRunResultOut(DraftVersionOut):
+    """run-agent / repair 结果：草稿 + 校验信息（兼容 DraftVersion 字段）。"""
+
+    verify_ok: Optional[bool] = None
+    verification_issues: List[str] = Field(default_factory=list)
+    repair_available: bool = False
+    writer_word_count: Optional[int] = None
+    writer_word_target: Optional[Dict[str, Any]] = None
+    repaired: bool = False

@@ -90,6 +90,21 @@ def _mock_zotero_service(seed_items: Optional[List[dict]] = None) -> MagicMock:
     mock_svc.list_collections.return_value = [
         {"key": "ROOTKEY", "name": "Test", "parentCollection": False}
     ]
+    mock_svc.collection_exists.return_value = True
+    mock_svc.list_child_collections.return_value = [
+        {"key": "SUBINTRO", "name": "Introduction"},
+        {"key": "SUBLR", "name": "Literature Review"},
+        {"key": "SUBCONC", "name": "Conclusion"},
+    ]
+    mock_svc.list_accessible_top_collections.return_value = [
+        {
+            "key": "EXISTING",
+            "name": "Existing Coll",
+            "library_type": "user",
+            "library_id": "123",
+            "library_name": "My Library",
+        }
+    ]
     return mock_svc
 
 
@@ -118,7 +133,7 @@ async def prepare_confirmed_literatures(
         for i in range(count)
     ]
     with (
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
         patch("app.api.zotero.zotero_service", mock_svc),
     ):
         res = await auth_client.post(

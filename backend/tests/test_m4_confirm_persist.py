@@ -43,7 +43,7 @@ async def test_confirm_persists_directives_facts_and_refs(auth_client, session_f
     lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=1)
     with (
         patch.object(summarizer_module, "has_openai_key", lambda: False),
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
     ):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",

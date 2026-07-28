@@ -29,12 +29,20 @@ from app.services.literature_workflow import (
     dedupe_candidates,
     import_confirmed_items,
 )
+from app.services.literature_assignments import is_attach_mode
 from app.services.literature_query import suggest_chapter_query
-from app.services.zotero_service import zotero_service
+from app.services.zotero_service import zotero_for_project
 from app.services.summarizer import has_openai_key
 
 router = APIRouter(tags=["literature-search"])
 settings = get_settings()
+
+_ATTACH_BLOCK = "attach 模式请使用章节分配（literature-assignments），不可检索/入库"
+
+
+def _reject_attach(project: Project) -> None:
+    if is_attach_mode(project):
+        raise HTTPException(status_code=400, detail=_ATTACH_BLOCK)
 
 _SEARCH_SERVICES = {
     "ieee": ieee_aut_search_service,
@@ -55,6 +63,8 @@ class LiteratureConfirmRequest(BaseModel):
     """确认入库：按候选下标勾选。"""
 
     indices: List[int] = Field(..., min_length=1)
+    # attach 模式必填：绑定根或其直接子集合
+    target_collection_key: Optional[str] = None
 
 
 class SuggestQueryRequest(BaseModel):
@@ -84,15 +94,15 @@ async def _library_snapshot_for_project(project: Project, db: AsyncSession) -> l
     不做全量 sync，避免检索时改写本地库。
     """
     _ = db
-    if project.zotero_collection_id and zotero_service.is_configured:
-        try:
-            remote = zotero_service.fetch_project_collection_items(
-                project.zotero_collection_id
-            )
-            if remote:
-                return remote
-        except Exception as exc:  # noqa: BLE001
-            _ = exc
+    if project.zotero_collection_id:
+        svc = zotero_for_project(project)
+        if svc.is_configured:
+            try:
+                remote = svc.fetch_project_collection_items(project.zotero_collection_id)
+                if remote:
+                    return remote
+            except Exception as exc:  # noqa: BLE001
+                _ = exc
     return list(project.literatures or [])
 
 
@@ -118,6 +128,7 @@ async def suggest_literature_query(
     无 OPENAI_API_KEY 时返回规则回退词（mode=fallback）。
     """
     project = await _assert_project_owner(project_id, current_user, db)
+    _reject_attach(project)
     heading = payload.outline_heading.strip()
     outline = project.paper_outline if isinstance(project.paper_outline, list) else []
     key_points = ""
@@ -160,6 +171,7 @@ async def literature_search_ping(
 ) -> dict:
     """探测项目启用库的连通性。"""
     project = await _assert_project_owner(project_id, current_user, db)
+    _reject_attach(project)
     try:
         providers = resolve_providers_for_project(project.literature_databases)
     except ValueError as exc:
@@ -209,6 +221,7 @@ async def literature_search(
     query 为空时使用 LITERATURE_TEST_QUERY。
     """
     project = await _assert_project_owner(project_id, current_user, db)
+    _reject_attach(project)
     heading = payload.outline_heading.strip()
     outline = project.paper_outline if isinstance(project.paper_outline, list) else []
     headings = {
@@ -318,6 +331,7 @@ async def confirm_literature_search(
 ) -> List[LiteratureOut]:
     """将勾选的候选写入 Zotero 章节子集合 + 本地 literatures。"""
     project = await _assert_project_owner(project_id, current_user, db)
+    _reject_attach(project)
     run = literature_search_store.get(run_id)
     if not run or run.get("project_id") != str(project_id):
         raise HTTPException(status_code=404, detail="检索结果不存在或已过期")
@@ -336,7 +350,12 @@ async def confirm_literature_search(
             outline_heading=run["outline_heading"],
             items=selected,
             source_query=run.get("query") or "",
+            target_collection_key=payload.target_collection_key,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"入库失败: {exc}") from exc
 

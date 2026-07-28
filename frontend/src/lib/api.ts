@@ -10,6 +10,9 @@ export type Project = {
   specific_requirements?: string | null;
   confirmed_facts?: string | null;
   zotero_collection_id?: string | null;
+  zotero_binding_mode?: "create" | "attach" | string | null;
+  zotero_library_type?: "user" | "group" | string | null;
+  zotero_library_id?: string | null;
   literature_databases?: string[] | null;
   status: string;
   created_at: string;
@@ -61,10 +64,16 @@ export type Literature = {
   year?: string | null;
   doi?: string | null;
   abstract?: string | null;
+  landing_url?: string | null;
+  evidence_tier?: string | null;
+  evidence_source?: string | null;
+  evidence_fetched_at?: string | null;
   relevance_score?: number | null;
   selected_for_draft: boolean;
   confirmed_at?: string | null;
   created_at: string;
+  assigned_headings?: string[];
+  collection_path?: string | null;
 };
 
 export type LiteratureCandidate = {
@@ -122,6 +131,12 @@ export type DraftVersion = {
   citation_warnings?: string[] | null;
   directives_persisted?: number | null;
   references_matched?: number | null;
+  verify_ok?: boolean | null;
+  verification_issues?: string[];
+  repair_available?: boolean;
+  writer_word_count?: number | null;
+  writer_word_target?: { min?: number; max?: number } | null;
+  repaired?: boolean;
 };
 
 export type DraftWorking = {

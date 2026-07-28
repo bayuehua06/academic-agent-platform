@@ -53,7 +53,7 @@ async def test_ensure_structure(auth_client):
 
     mock_svc = _mock_zotero_service()
     with (
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
         patch("app.api.zotero.zotero_service", mock_svc),
     ):
         res = await auth_client.post(f"/api/zotero/projects/{pid}/ensure-structure")
@@ -64,6 +64,102 @@ async def test_ensure_structure(auth_client):
 
     project = (await auth_client.get(f"/api/projects/{pid}")).json()
     assert project["zotero_collection_id"] == "ROOTKEY"
+    assert project["zotero_binding_mode"] == "create"
+
+
+async def test_bind_create(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Bind Create"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+    mock_svc = _mock_zotero_service()
+    with (
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
+        patch("app.api.zotero.zotero_service", mock_svc),
+    ):
+        res = await auth_client.post(
+            f"/api/zotero/projects/{pid}/binding",
+            json={"mode": "create"},
+        )
+    assert res.status_code == 200, res.text
+    assert res.json()["zotero_binding_mode"] == "create"
+    project = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert project["zotero_collection_id"] == "ROOTKEY"
+    assert project["zotero_binding_mode"] == "create"
+
+
+async def test_bind_attach_syncs_and_blocks_ensure(auth_client):
+    create = await auth_client.post("/api/projects", json={"title": "Bind Attach"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+    mock_svc = _mock_zotero_service(
+        seed_items=[
+            {
+                "zotero_item_key": "OLD1",
+                "title": "Preexisting Paper",
+                "authors": ["A"],
+                "year": "2021",
+                "doi": "10.1000/pre.1",
+                "abstract": "x",
+                "zotero_subcollection_key": "EXISTING",
+                "outline_heading": None,
+            }
+        ]
+    )
+    with (
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
+        patch("app.api.zotero.zotero_service", mock_svc),
+    ):
+        res = await auth_client.post(
+            f"/api/zotero/projects/{pid}/binding",
+            json={
+                "mode": "attach",
+                "collection_key": "EXISTING",
+                "library_type": "user",
+                "library_id": "123",
+            },
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["synced_count"] == 1
+        blocked = await auth_client.post(f"/api/zotero/projects/{pid}/ensure-structure")
+    assert blocked.status_code == 400
+    project = (await auth_client.get(f"/api/projects/{pid}")).json()
+    assert project["zotero_binding_mode"] == "attach"
+    assert project["zotero_collection_id"] == "EXISTING"
+    assert project["zotero_library_id"] == "123"
+    lits = (await auth_client.get(f"/api/zotero/projects/{pid}/literatures")).json()
+    assert any(row["title"] == "Preexisting Paper" for row in lits)
+
+
+async def test_attach_blocks_import_entirely(auth_client):
+    """Attach 废止平台写回 Zotero：即使带 target 也 400。"""
+    create = await auth_client.post("/api/projects", json={"title": "Attach Import"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+    mock_svc = _mock_zotero_service()
+    with (
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
+        patch("app.api.zotero.zotero_service", mock_svc),
+    ):
+        bind = await auth_client.post(
+            f"/api/zotero/projects/{pid}/binding",
+            json={
+                "mode": "attach",
+                "collection_key": "EXISTING",
+                "library_type": "group",
+                "library_id": "999",
+            },
+        )
+        assert bind.status_code == 200, bind.text
+        blocked = await auth_client.post(
+            f"/api/zotero/projects/{pid}/import",
+            json={
+                "outline_heading": "Introduction",
+                "target_collection_key": "EXISTING",
+                "items": [{"title": "New Paper", "doi": "10.1000/n.1"}],
+            },
+        )
+    assert blocked.status_code == 400
+    assert "章节分配" in blocked.json()["detail"]
 
 
 async def test_import_literatures(auth_client):
@@ -94,7 +190,9 @@ async def test_sync_from_zotero_pulls_remote(auth_client):
             "outline_heading": "Introduction",
         }
     )
-    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+    with patch(
+        "app.services.literature_workflow.zotero_for_project", return_value=mock_svc
+    ):
         res = await auth_client.post(f"/api/zotero/projects/{pid}/sync")
     assert res.status_code == 200, res.text
     titles = {row["title"] for row in res.json()}

@@ -54,6 +54,15 @@ async def _hard_cut_draft_columns(conn) -> None:
             "ALTER TABLE draft_workings ADD COLUMN working_facts TEXT",
             "ALTER TABLE draft_workings ADD COLUMN stale_headings TEXT",
             "ALTER TABLE projects ADD COLUMN confirmed_facts TEXT",
+            "ALTER TABLE projects ADD COLUMN zotero_binding_mode VARCHAR(20)",
+            "ALTER TABLE projects ADD COLUMN zotero_library_type VARCHAR(20)",
+            "ALTER TABLE projects ADD COLUMN zotero_library_id VARCHAR(100)",
+            "ALTER TABLE literatures ADD COLUMN landing_url VARCHAR(1000)",
+            "ALTER TABLE literatures ADD COLUMN evidence_text TEXT",
+            "ALTER TABLE literatures ADD COLUMN evidence_tier VARCHAR(30)",
+            "ALTER TABLE literatures ADD COLUMN evidence_source VARCHAR(30)",
+            "ALTER TABLE literatures ADD COLUMN evidence_content_key VARCHAR(500)",
+            "ALTER TABLE literatures ADD COLUMN evidence_fetched_at TIMESTAMP",
         ]
         for sql in stmts:
             try:
@@ -73,6 +82,15 @@ async def _hard_cut_draft_columns(conn) -> None:
         "ALTER TABLE draft_workings ADD COLUMN IF NOT EXISTS working_facts TEXT",
         "ALTER TABLE draft_workings ADD COLUMN IF NOT EXISTS stale_headings JSONB",
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS confirmed_facts TEXT",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS zotero_binding_mode VARCHAR(20)",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS zotero_library_type VARCHAR(20)",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS zotero_library_id VARCHAR(100)",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS landing_url VARCHAR(1000)",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS evidence_text TEXT",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS evidence_tier VARCHAR(30)",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS evidence_source VARCHAR(30)",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS evidence_content_key VARCHAR(500)",
+        "ALTER TABLE literatures ADD COLUMN IF NOT EXISTS evidence_fetched_at TIMESTAMPTZ",
     ]
     for sql in stmts:
         await conn.execute(text(sql))

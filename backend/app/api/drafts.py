@@ -53,6 +53,7 @@ from app.services.draft_versioning import (
     next_minor_for_major,
     next_version_number,
 )
+from app.services.evidence_cards import build_evidence_cards, persist_evidence_backfill
 from app.services.pandoc_service import pandoc_service
 from app.services.references_rebuild import rebuild_apa_references_from_citations
 
@@ -487,21 +488,60 @@ async def polish_working_section(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # 文献：可选勾选，否则项目全部已确认
+    # 文献：可选勾选；attach 默认用本章分配；create 默认项目文献
+    from app.services.literature_assignments import (
+        filter_sources_for_heading,
+        is_attach_mode,
+        load_assignment_map,
+        sources_from_literatures_for_writer,
+    )
+
     lit_q = select(Literature).where(Literature.project_id == project_id)
     if payload.literature_ids:
         lit_q = lit_q.where(Literature.id.in_(payload.literature_ids))
     lit_result = await db.execute(lit_q)
     lits = list(lit_result.scalars().all())
-    sources = [
-        {
-            "title": x.title,
-            "authors": x.authors or [],
-            "year": x.year,
-            "doi": x.doi,
-        }
-        for x in lits
-    ]
+    if payload.literature_ids:
+        sources = [
+            {
+                "title": x.title,
+                "authors": x.authors or [],
+                "year": x.year,
+                "doi": x.doi,
+                "abstract": x.abstract or "",
+                "landing_url": x.landing_url or "",
+                "evidence_text": x.evidence_text or "",
+                "evidence_tier": x.evidence_tier or "",
+                "evidence_source": x.evidence_source or "",
+                "evidence_content_key": x.evidence_content_key or "",
+                "zotero_item_key": x.zotero_item_key,
+            }
+            for x in lits
+        ]
+    elif is_attach_mode(project):
+        assign_map = await load_assignment_map(project.id, db)
+        sources = sources_from_literatures_for_writer(project, lits, assign_map)
+        sources = filter_sources_for_heading(sources, payload.heading)
+    else:
+        sources = [
+            {
+                "title": x.title,
+                "authors": x.authors or [],
+                "year": x.year,
+                "doi": x.doi,
+                "abstract": x.abstract or "",
+                "landing_url": x.landing_url or "",
+                "evidence_text": x.evidence_text or "",
+                "evidence_tier": x.evidence_tier or "",
+                "evidence_source": x.evidence_source or "",
+                "evidence_content_key": x.evidence_content_key or "",
+                "zotero_item_key": x.zotero_item_key,
+            }
+            for x in lits
+            if x.selected_for_draft
+        ]
+    sources = await build_evidence_cards(sources, project=project)
+    await persist_evidence_backfill(project.id, db, sources)
 
     outline_kp = match_outline_key_points(project.paper_outline, payload.heading)
     upstream = build_upstream_summaries(composed, payload.heading)

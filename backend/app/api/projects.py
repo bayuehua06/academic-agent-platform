@@ -14,26 +14,86 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.agents.graph import run_academic_workflow
+from app.agents.nodes.writer import repair_draft_markdown
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.db.models import DraftVersion, Project, SectionDirective, User
+from app.db.models import DraftVersion, Literature, Project, SectionDirective, User
 from app.models.schemas import (
+    AgentProgressOut,
+    AgentRepairRequest,
     AgentRunRequest,
+    AgentRunResultOut,
     DraftVersionOut,
+    LiteratureAssignmentPut,
+    LiteratureAssignmentsOut,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
     SectionDirectiveOut,
     SectionDirectiveUpdate,
 )
+from app.services.agent_progress import (
+    clear_agent_progress,
+    get_agent_progress,
+    set_agent_progress,
+)
+from app.services.literature_assignments import (
+    get_assignments_view,
+    load_assignment_map,
+    replace_section_assignments,
+    sources_from_literatures_for_writer,
+)
 from app.services.literature_providers import default_database_ids, parse_database_ids
 from app.services.literature_workflow import sync_literatures_from_zotero
 from app.services.project_assembly import ensure_writing_ready
 from app.services.draft_versioning import labels_from_draft, next_agent_major, next_version_number
+from app.services.evidence_cards import build_evidence_cards, persist_evidence_backfill
+from app.services.references_rebuild import rebuild_apa_references_from_citations
+from app.services.structure_guard import format_verification_issues_for_changelog
+from app.services.writing_constraints import count_words
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+
+def _draft_to_agent_result(
+    draft: DraftVersion,
+    *,
+    verification: Optional[dict] = None,
+    word_count: Optional[int] = None,
+    word_target: Optional[dict] = None,
+    repaired: bool = False,
+) -> AgentRunResultOut:
+    maj, minor, label = labels_from_draft(draft)
+    v = verification or {}
+    issues = [str(i) for i in (v.get("issues") or []) if str(i).strip()]
+    verify_ok = v.get("ok")
+    repair_available = bool(
+        verify_ok is False
+        or v.get("repair_skipped")
+        or v.get("repair_needed")
+    ) and not repaired
+    return AgentRunResultOut(
+        id=draft.id,
+        project_id=draft.project_id,
+        version_number=draft.version_number,
+        major=maj,
+        minor=minor,
+        display_label=label,
+        parent_version_id=draft.parent_version_id,
+        base_version_id=draft.base_version_id,
+        content_markdown=draft.content_markdown,
+        apa_references_block=draft.apa_references_block,
+        source_type=draft.source_type,
+        changelog=draft.changelog,
+        created_at=draft.created_at,
+        verify_ok=verify_ok if verify_ok is not None else None,
+        verification_issues=issues,
+        repair_available=repair_available,
+        writer_word_count=word_count if word_count is not None else v.get("word_count"),
+        writer_word_target=word_target or v.get("word_target"),
+        repaired=repaired,
+    )
 
 async def _get_user_project(
     project_id: UUID, user: User, db: AsyncSession
@@ -98,6 +158,9 @@ def _to_project_out(project: Project) -> ProjectOut:
         specific_requirements=project.specific_requirements,
         confirmed_facts=project.confirmed_facts,
         zotero_collection_id=project.zotero_collection_id,
+        zotero_binding_mode=project.zotero_binding_mode,
+        zotero_library_type=project.zotero_library_type,
+        zotero_library_id=project.zotero_library_id,
         literature_databases=project.literature_databases,
         status=_derive_project_status(
             project,
@@ -219,13 +282,33 @@ async def delete_project(
     await db.delete(project)
 
 
-@router.post("/{project_id}/run-agent", response_model=DraftVersionOut)
+@router.get("/{project_id}/agent-progress", response_model=AgentProgressOut)
+async def agent_progress(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AgentProgressOut:
+    """查询当前进程内 run-agent 进度（无进度时 running=false）。"""
+    await _get_user_project(project_id, current_user, db)
+    raw = get_agent_progress(project_id)
+    if not raw:
+        return AgentProgressOut(
+            project_id=str(project_id),
+            stage="idle",
+            label="空闲",
+            detail="",
+            running=False,
+        )
+    return AgentProgressOut(**raw)
+
+
+@router.post("/{project_id}/run-agent", response_model=AgentRunResultOut)
 async def run_agent(
     project_id: UUID,
     payload: AgentRunRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> DraftVersionOut:
+) -> AgentRunResultOut:
     """触发 LangGraph 学术写作工作流，并持久化文献与草稿版本。"""
     project = await _get_user_project(project_id, current_user, db)
     try:
@@ -233,6 +316,7 @@ async def run_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    set_agent_progress(project.id, "starting", percent=5)
     project.status = "FETCHING_PAPERS"
     await db.flush()
 
@@ -251,9 +335,16 @@ async def run_agent(
 
     synced: list = list(project.literatures or [])
     if project.zotero_collection_id:
+        set_agent_progress(
+            project.id,
+            "sync_zotero",
+            detail="拉取集合条目并保持章节分配…",
+            percent=15,
+        )
         try:
             synced = await sync_literatures_from_zotero(project, db)
         except ValueError as exc:
+            set_agent_progress(project.id, "error", detail=str(exc))
             project.status = status_before
             await db.flush()
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -262,24 +353,24 @@ async def run_agent(
             logger.warning("写作前 Zotero 同步跳过 project=%s: %s", project.id, exc)
             synced = list(project.literatures or [])
         except Exception as exc:  # noqa: BLE001
+            set_agent_progress(project.id, "error", detail=str(exc))
             project.status = status_before
             await db.flush()
             raise HTTPException(status_code=502, detail=f"从 Zotero 拉取文献失败: {exc}") from exc
 
-    sources_for_draft = [lit for lit in synced if lit.selected_for_draft]
-
-    existing_sources = [
-        {
-            "title": lit.title,
-            "authors": lit.authors or [],
-            "year": lit.year or "",
-            "doi": lit.doi or "",
-            "abstract": lit.abstract or "",
-            "relevance_score": lit.relevance_score or 0.0,
-            "zotero_item_key": lit.zotero_item_key,
-        }
-        for lit in sources_for_draft
-    ]
+    sources_for_draft = list(synced or [])
+    assign_map = await load_assignment_map(project.id, db)
+    existing_sources = sources_from_literatures_for_writer(
+        project, sources_for_draft, assign_map
+    )
+    set_agent_progress(
+        project.id,
+        "evidence",
+        detail=f"准备 {len(existing_sources)} 篇文献的证据卡…",
+        percent=35,
+    )
+    existing_sources = await build_evidence_cards(existing_sources, project=project)
+    await persist_evidence_backfill(project.id, db, existing_sources)
 
     dir_result = await db.execute(
         select(SectionDirective).where(
@@ -310,6 +401,12 @@ async def run_agent(
     try:
         project.status = "DRAFTING"
         await db.flush()
+        set_agent_progress(
+            project.id,
+            "drafting",
+            detail="约束抽取 + 分节写作 + APA 引用整理…",
+            percent=55,
+        )
         result = run_academic_workflow(
             project_id=str(project.id),
             assessment_summary=assessment_text,
@@ -323,16 +420,34 @@ async def run_agent(
             section_directives=section_directives,
             confirmed_facts=project.confirmed_facts or "",
             available_documents=available_documents,
+            auto_repair=bool(payload.auto_repair),
         )
     except Exception as exc:  # noqa: BLE001
+        set_agent_progress(project.id, "error", detail=str(exc))
         project.status = status_before
         await db.flush()
         raise HTTPException(status_code=500, detail=f"Agent 执行失败: {exc}") from exc
 
     _ = payload.skip_search
 
+    set_agent_progress(project.id, "saving", detail="写入草稿版本…", percent=90)
     next_version = await next_version_number(db, project.id)
     major = await next_agent_major(db, project.id)
+    verification = result.get("writer_verification") or {}
+    issues_bit = format_verification_issues_for_changelog(verification)
+    skipped = "repair_skipped=True" if verification.get("repair_skipped") else ""
+    changelog = (
+        f"LangGraph 生成 v{major}; keywords={result.get('keywords')}; "
+        f"writer={result.get('writer_mode') or 'template'}; "
+        f"model={result.get('writer_model')}; "
+        f"words≈{result.get('writer_word_count')}; "
+        f"target={result.get('writer_word_target')}; "
+        f"verify_ok={verification.get('ok')}"
+    )
+    if skipped:
+        changelog = f"{changelog}; {skipped}"
+    if issues_bit:
+        changelog = f"{changelog}; {issues_bit}"
     draft = DraftVersion(
         project_id=project.id,
         version_number=next_version,
@@ -341,14 +456,7 @@ async def run_agent(
         content_markdown=result.get("draft_markdown") or "",
         apa_references_block=result.get("apa_references"),
         source_type="AGENT_GEN",
-        changelog=(
-            f"LangGraph 生成 v{major}; keywords={result.get('keywords')}; "
-            f"writer={result.get('writer_mode') or 'template'}; "
-            f"model={result.get('writer_model')}; "
-            f"words≈{result.get('writer_word_count')}; "
-            f"target={result.get('writer_word_target')}; "
-            f"verify_ok={((result.get('writer_verification') or {}).get('ok'))}"
-        ),
+        changelog=changelog,
     )
     db.add(draft)
     # 有草稿 ≠ 作业完成；仅标记进度
@@ -356,22 +464,157 @@ async def run_agent(
     project.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(draft)
-    maj, minor, label = labels_from_draft(draft)
-    return DraftVersionOut(
-        id=draft.id,
-        project_id=draft.project_id,
-        version_number=draft.version_number,
-        major=maj,
-        minor=minor,
-        display_label=label,
-        parent_version_id=draft.parent_version_id,
-        base_version_id=draft.base_version_id,
-        content_markdown=draft.content_markdown,
-        apa_references_block=draft.apa_references_block,
-        source_type=draft.source_type,
-        changelog=draft.changelog,
-        created_at=draft.created_at,
+    set_agent_progress(project.id, "done", detail=f"已生成 v{major}", percent=100)
+    clear_agent_progress(project.id)
+    return _draft_to_agent_result(
+        draft,
+        verification=verification,
+        word_count=result.get("writer_word_count"),
+        word_target=result.get("writer_word_target"),
+        repaired=bool(verification.get("repaired")),
     )
+
+
+@router.post("/{project_id}/repair-agent-draft", response_model=AgentRunResultOut)
+async def repair_agent_draft(
+    project_id: UUID,
+    payload: AgentRepairRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AgentRunResultOut:
+    """对已生成草稿做一轮自动补写/压缩，另存为新版本。"""
+    project = await _get_user_project(project_id, current_user, db)
+    base = next(
+        (d for d in (project.draft_versions or []) if d.id == payload.version_id),
+        None,
+    )
+    if not base:
+        result = await db.execute(
+            select(DraftVersion).where(
+                DraftVersion.id == payload.version_id,
+                DraftVersion.project_id == project.id,
+            )
+        )
+        base = result.scalar_one_or_none()
+    if not base:
+        raise HTTPException(status_code=404, detail="草稿版本不存在")
+
+    set_agent_progress(
+        project.id,
+        "drafting",
+        detail="正在按校验问题自动补写/压缩…",
+        percent=60,
+    )
+    paper_outline = project.paper_outline if isinstance(project.paper_outline, list) else []
+    assign_map = await load_assignment_map(project.id, db)
+    sources = sources_from_literatures_for_writer(
+        project, list(project.literatures or []), assign_map
+    )
+    sources = await build_evidence_cards(sources, project=project)
+    available_documents = [
+        {
+            "title": d.title or "",
+            "role": d.role or "",
+            "summary_text": (d.summary_text or "")[:12000],
+            "raw_text": (d.raw_text or "")[:12000],
+        }
+        for d in (project.source_documents or [])
+        if d.role in ("BACKGROUND", "ASSESSMENT", "OUTLINE", "SPECIFIC")
+    ]
+
+    try:
+        repaired_md, _constraints, verification = repair_draft_markdown(
+            base.content_markdown or "",
+            paper_outline=paper_outline,
+            specific_requirements=project.specific_requirements or "",
+            assessment_summary=project.assessment_summary or "",
+            sources=sources,
+            available_documents=available_documents,
+        )
+    except Exception as exc:  # noqa: BLE001
+        set_agent_progress(project.id, "error", detail=str(exc))
+        raise HTTPException(status_code=500, detail=f"草稿补写失败: {exc}") from exc
+
+    _body, apa_text, _unmatched, _matched = rebuild_apa_references_from_citations(
+        repaired_md, sources
+    )
+
+    set_agent_progress(project.id, "saving", detail="保存补写后的草稿…", percent=90)
+    next_version = await next_version_number(db, project.id)
+    major = await next_agent_major(db, project.id)
+    _base_maj, _base_min, base_label = labels_from_draft(base)
+    issues_bit = format_verification_issues_for_changelog(verification)
+    changelog = (
+        f"Agent repair from v{base_label}; "
+        f"words≈{count_words(repaired_md)}; "
+        f"verify_ok={verification.get('ok')}"
+    )
+    if issues_bit:
+        changelog = f"{changelog}; {issues_bit}"
+
+    draft = DraftVersion(
+        project_id=project.id,
+        version_number=next_version,
+        major=major,
+        minor=0,
+        parent_version_id=base.id,
+        base_version_id=base.id,
+        content_markdown=repaired_md,
+        apa_references_block=apa_text or base.apa_references_block,
+        source_type="AGENT_REPAIR",
+        changelog=changelog,
+    )
+    db.add(draft)
+    project.status = "HAS_DRAFT"
+    project.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(draft)
+    set_agent_progress(project.id, "done", detail=f"补写完成 v{major}", percent=100)
+    clear_agent_progress(project.id)
+    return _draft_to_agent_result(
+        draft,
+        verification=verification,
+        word_count=count_words(repaired_md),
+        word_target=verification.get("word_target"),
+        repaired=True,
+    )
+
+
+@router.get(
+    "/{project_id}/literature-assignments",
+    response_model=LiteratureAssignmentsOut,
+)
+async def get_literature_assignments(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LiteratureAssignmentsOut:
+    """按章聚合的文献分配视图。"""
+    project = await _get_user_project(project_id, current_user, db)
+    view = await get_assignments_view(project, db)
+    return LiteratureAssignmentsOut(**view)
+
+
+@router.put(
+    "/{project_id}/literature-assignments/{outline_heading:path}",
+    response_model=LiteratureAssignmentsOut,
+)
+async def put_literature_assignments(
+    project_id: UUID,
+    outline_heading: str,
+    payload: LiteratureAssignmentPut,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LiteratureAssignmentsOut:
+    """整章覆盖该章的文献分配（幂等）。"""
+    project = await _get_user_project(project_id, current_user, db)
+    try:
+        view = await replace_section_assignments(
+            project, db, outline_heading=outline_heading, literature_ids=payload.literature_ids
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return LiteratureAssignmentsOut(**view)
 
 
 @router.get("/{project_id}/section-directives", response_model=List[SectionDirectiveOut])

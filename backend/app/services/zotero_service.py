@@ -94,6 +94,80 @@ class ZoteroService:
             )
         return out
 
+    def collection_exists(self, collection_key: str) -> bool:
+        """校验集合是否可读。"""
+        key = (collection_key or "").strip()
+        if not key or not self.is_configured:
+            return False
+        try:
+            self._get_client().collection(key)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def list_accessible_top_collections(self) -> List[Dict[str, Any]]:
+        """
+        聚合当前 API Key 可访问的顶层 Collections：个人库 + 各 Group。
+
+        依赖 .env 中的个人 ZOTERO_LIBRARY_ID（用于 groups 发现入口）。
+        """
+        api_key = self.api_key or settings.zotero_api_key
+        user_id = (settings.zotero_library_id or "").strip()
+        if not api_key or not user_id:
+            raise RuntimeError("Zotero 未配置：需要 ZOTERO_API_KEY 与个人 ZOTERO_LIBRARY_ID")
+
+        out: List[Dict[str, Any]] = []
+
+        def _append_tops(
+            svc: "ZoteroService",
+            library_type: str,
+            library_id: str,
+            library_name: str,
+        ) -> None:
+            for row in svc.list_collections(limit=200):
+                parent = row.get("parentCollection")
+                if parent:
+                    continue
+                key = row.get("key")
+                if not key:
+                    continue
+                out.append(
+                    {
+                        "key": key,
+                        "name": (row.get("name") or "").strip() or key,
+                        "library_type": library_type,
+                        "library_id": str(library_id),
+                        "library_name": library_name,
+                    }
+                )
+
+        user_svc = ZoteroService(library_id=user_id, library_type="user", api_key=api_key)
+        _append_tops(user_svc, "user", user_id, "My Library")
+
+        try:
+            groups = user_svc._get_client().groups() or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("列举 Zotero groups 失败: %s", exc)
+            groups = []
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            data = group.get("data") if isinstance(group.get("data"), dict) else {}
+            gid = group.get("id") or data.get("id")
+            if gid is None:
+                continue
+            gname = (data.get("name") or group.get("name") or f"Group {gid}").strip()
+            try:
+                gsvc = ZoteroService(
+                    library_id=str(gid), library_type="group", api_key=api_key
+                )
+                _append_tops(gsvc, "group", str(gid), gname)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("跳过不可访问 Group %s: %s", gid, exc)
+
+        return out
+
     def find_child_collection(
         self, name: str, parent_key: Optional[str] = None
     ) -> Optional[str]:
@@ -231,6 +305,7 @@ class ZoteroService:
         template = zot.item_template("journalArticle")
         template["title"] = meta.get("title", "Untitled")
         template["DOI"] = meta.get("doi", "")
+        template["url"] = meta.get("url", "")
         template["abstractNote"] = meta.get("abstract", "")
         template["date"] = str(meta.get("year", ""))
 
@@ -353,6 +428,7 @@ class ZoteroService:
                 break
         doi = (data.get("DOI") or data.get("doi") or "").strip() or None
         abstract = (data.get("abstractNote") or "").strip() or None
+        url = (data.get("url") or "").strip() or None
         return {
             "zotero_item_key": key,
             "title": title,
@@ -360,8 +436,76 @@ class ZoteroService:
             "year": year,
             "doi": doi,
             "abstract": abstract,
+            "url": url,
         }
+
+    def list_pdf_attachment_keys(self, item_key: str) -> List[str]:
+        """返回父条目下可下载的 PDF 附件 key（优先 application/pdf / .pdf）。"""
+        key = (item_key or "").strip()
+        if not key or not self.is_configured:
+            return []
+        try:
+            children = self._get_client().children(key) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Zotero children 失败 item=%s: %s", key, exc)
+            return []
+        pdf_keys: List[str] = []
+        for child in children:
+            data = child.get("data") if isinstance(child, dict) else None
+            if not isinstance(data, dict):
+                continue
+            if (data.get("itemType") or "").strip() != "attachment":
+                continue
+            content_type = (data.get("contentType") or "").lower()
+            filename = (data.get("filename") or data.get("title") or "").lower()
+            link_mode = (data.get("linkMode") or "").strip()
+            # linked_url 无本地文件可 dump
+            if link_mode in {"linked_url"}:
+                continue
+            if "pdf" in content_type or filename.endswith(".pdf"):
+                att_key = data.get("key") or child.get("key")
+                if att_key:
+                    pdf_keys.append(str(att_key))
+        return pdf_keys
+
+    def download_file_bytes(self, attachment_key: str) -> bytes:
+        """下载附件二进制（pyzotero file）。"""
+        key = (attachment_key or "").strip()
+        if not key or not self.is_configured:
+            return b""
+        try:
+            data = self._get_client().file(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Zotero file 下载失败 attachment=%s: %s", key, exc)
+            return b""
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
+        if isinstance(data, str):
+            return data.encode("utf-8", errors="ignore")
+        return b""
 
 
 # 模块级单例，便于服务层调用
 zotero_service = ZoteroService()
+
+
+def zotero_for_project(project: Any) -> ZoteroService:
+    """
+    按项目绑定的 library 返回客户端；无项目级配置时回退全局单例（便于测试 patch）。
+
+    project 需具备 zotero_library_id / zotero_library_type 属性（可为 ORM）。
+    """
+    lib_id = (getattr(project, "zotero_library_id", None) or "").strip()
+    lib_type = (getattr(project, "zotero_library_type", None) or "").strip()
+    if not lib_id:
+        lib_id = (settings.zotero_library_id or "").strip()
+    if not lib_type:
+        lib_type = (settings.zotero_library_type or "user").strip() or "user"
+
+    singleton_id = (zotero_service.library_id or settings.zotero_library_id or "").strip()
+    singleton_type = (zotero_service.library_type or settings.zotero_library_type or "user").strip()
+    if lib_id == singleton_id and lib_type == singleton_type:
+        return zotero_service
+
+    api_key = zotero_service.api_key or settings.zotero_api_key
+    return ZoteroService(library_id=lib_id, library_type=lib_type, api_key=api_key)

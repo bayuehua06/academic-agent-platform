@@ -64,6 +64,7 @@ def run_academic_workflow(
     section_directives: Optional[list] = None,
     confirmed_facts: str = "",
     available_documents: Optional[list] = None,
+    auto_repair: bool = False,
 ) -> AcademicAgentState:
     """
     执行完整学术写作工作流。
@@ -94,6 +95,7 @@ def run_academic_workflow(
         "section_directives": list(section_directives or []),
         "confirmed_facts": confirmed_facts or "",
         "available_documents": list(available_documents or []),
+        "writer_auto_repair": bool(auto_repair),
         "error": None,
         "current_step": "start",
     }

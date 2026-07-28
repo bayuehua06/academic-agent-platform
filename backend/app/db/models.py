@@ -65,6 +65,10 @@ class Project(Base):
     # 确认精修工作区后持久化的跨节 Facts（供下次精修 / run-agent）
     confirmed_facts: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     zotero_collection_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # create | attach；与 zotero_library_* 共同决定文献范围
+    zotero_binding_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    zotero_library_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    zotero_library_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # 本项目启用的检索库 id 列表，如 ["ieee","acm"]；空则用全局默认
     literature_databases: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="INITIALIZING")
@@ -90,6 +94,11 @@ class Project(Base):
     )
     section_directives: Mapped[List["SectionDirective"]] = relationship(
         "SectionDirective", back_populates="project", cascade="all, delete-orphan"
+    )
+    literature_section_assignments: Mapped[List["LiteratureSectionAssignment"]] = relationship(
+        "LiteratureSectionAssignment",
+        back_populates="project",
+        cascade="all, delete-orphan",
     )
 
 
@@ -150,6 +159,15 @@ class Literature(Base):
     year: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     doi: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     abstract: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    landing_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # 缓存 PDF/URL 抽取全文；按章 excerpt 仍现算，不落库
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence_tier: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    evidence_source: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    evidence_content_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    evidence_fetched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     selected_for_draft: Mapped[bool] = mapped_column(Boolean, default=True)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(
@@ -160,6 +178,53 @@ class Literature(Base):
     )
 
     project: Mapped["Project"] = relationship("Project", back_populates="literatures")
+    section_assignments: Mapped[List["LiteratureSectionAssignment"]] = relationship(
+        "LiteratureSectionAssignment",
+        back_populates="literature",
+        cascade="all, delete-orphan",
+    )
+
+
+class LiteratureSectionAssignment(Base):
+    """章节↔文献多对多分配（一篇可属多章；Attach 下为 Writer 真源）。"""
+
+    __tablename__ = "literature_section_assignments"
+    __table_args__ = (
+        Index(
+            "ix_lit_section_assign_project_heading",
+            "project_id",
+            "outline_heading",
+        ),
+        Index("ix_lit_section_assign_project_lit", "project_id", "literature_id"),
+        Index(
+            "uq_lit_section_assign_project_lit_heading",
+            "project_id",
+            "literature_id",
+            "outline_heading",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    literature_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("literatures.id", ondelete="CASCADE"), nullable=False
+    )
+    outline_heading: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    literature: Mapped["Literature"] = relationship(
+        "Literature", back_populates="section_assignments"
+    )
+    project: Mapped["Project"] = relationship(
+        "Project", back_populates="literature_section_assignments"
+    )
 
 
 class DraftVersion(Base):

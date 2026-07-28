@@ -45,6 +45,17 @@ export function ZoteroList({ items, onToggle }: Props) {
                   DOI: {lit.doi}
                 </a>
               )}
+              {(lit.evidence_tier || lit.evidence_source) && (
+                <p className="mt-1 text-xs text-stone-500">
+                  证据层级 {lit.evidence_tier || "metadata_only"}
+                  {lit.evidence_source ? ` · ${lit.evidence_source}` : ""}
+                </p>
+              )}
+              {!lit.abstract && (
+                <p className="mt-1 text-xs text-amber-700">
+                  缺少摘要/证据文本：Writer 将降级使用，避免编造具体发现。
+                </p>
+              )}
               {lit.abstract && (
                 <p className="mt-2 text-sm text-stone-500 line-clamp-3">{lit.abstract}</p>
               )}

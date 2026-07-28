@@ -13,8 +13,14 @@ class LiteratureSource(TypedDict, total=False):
     year: str
     doi: str
     abstract: str
+    landing_url: str
+    evidence_text: str
+    evidence_tier: str
+    evidence_source: str
+    evidence_content_key: str
     relevance_score: float
     zotero_item_key: Optional[str]
+    assigned_headings: List[str]
 
 
 class OutlineSection(TypedDict, total=False):
@@ -52,6 +58,7 @@ class AcademicAgentState(TypedDict, total=False):
     writer_word_target: Dict[str, int]
     writer_constraints: Dict[str, Any]
     writer_verification: Dict[str, Any]
+    writer_auto_repair: bool
     max_papers: int
     skip_search: bool
     zotero_collection_id: Optional[str]

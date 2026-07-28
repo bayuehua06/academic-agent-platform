@@ -82,7 +82,11 @@ class WritingConstraints:
         ]
         lo, hi = self.word_target()
         lang = (self.language or "English").strip() or "English"
-        lines.append(f"- Language: {lang} (DEFAULT is English unless explicitly overridden).")
+        lines.append(
+            f"- Language: {lang} (HARD default = academic English for prose AND tables; "
+            "translate Chinese outline/table drafts into English unless this line "
+            "explicitly requires another language)."
+        )
         lines.append(
             f"- Overall length target: {lo}-{hi} words (count in the output language). "
             "Do NOT exceed the max by padding; prefer cutting fluff over missing hard requirements."

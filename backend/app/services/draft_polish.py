@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.services.citation_guard import (
     CITATION_HARD_RULES,
-    format_allowed_sources_block,
     sanitize_citations,
 )
 from app.services.draft_sections import (
@@ -19,6 +18,7 @@ from app.services.draft_sections import (
 from app.services.structure_guard import format_table_seed_hint
 from app.services.llm_client import resolve_model, safe_invoke_chat
 from app.services import summarizer as summarizer_module
+from app.services.evidence_cards import format_allowed_sources_with_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,19 @@ _POLISH_SYSTEM = (
     "Other hard rules:\n"
     "- Output ONLY the revised section body in Markdown (include the heading line).\n"
     "- Preserve every <<LOCKED_n>> token EXACTLY where it appears (figures/tables).\n"
-    "- DEFAULT language: academic English unless the instruction says otherwise.\n"
+    "- LANGUAGE (HARD): academic English for ALL prose AND Markdown table headers/cells. "
+    "Chinese (or other languages) in the draft/outline seed are notes only — translate "
+    "and rewrite into English; do NOT leave Chinese draft text unless the instruction "
+    "explicitly requires Chinese.\n"
     "- Follow the user instruction closely; keep unchanged parts stable when possible.\n"
     "- OUTLINE SEED (authoritative): named cases, proposal titles, and facts from the "
-    "locked outline key_points MUST be preserved. Do NOT invent a conflicting case study "
-    "or rename the user's proposals unless the user instruction explicitly asks to change them.\n"
+    "locked outline key_points MUST be preserved (in English). Do NOT invent a conflicting "
+    "case study or rename the user's proposals unless the user instruction explicitly asks "
+    "to change them.\n"
     "- STRUCTURE FIDELITY: If the current section / OUTLINE SEED contains a Markdown table, "
-    "keep an isomorphic pipe table (same columns). Do not replace required tables with prose only "
-    "unless the user instruction explicitly asks to remove the table.\n"
+    "keep an isomorphic pipe table (same columns) with English cell text. Do not replace "
+    "required tables with prose only unless the user instruction explicitly asks to remove "
+    "the table.\n"
     "- WORKING FACTS and UPSTREAM SUMMARY (when provided) are also binding continuity "
     "constraints—stay consistent with them.\n"
     "- SECTION DIRECTIVES (when provided) come from prior confirmed polish—obey them "
@@ -44,8 +49,19 @@ _POLISH_SYSTEM = (
 )
 
 
-def format_sources_for_polish(sources: Sequence[Dict[str, Any]], limit: int = 40) -> str:
-    return format_allowed_sources_block(sources, limit=limit)
+def format_sources_for_polish(
+    sources: Sequence[Dict[str, Any]],
+    *,
+    heading: str,
+    outline_key_points: str,
+    limit: int = 40,
+) -> str:
+    return format_allowed_sources_with_evidence(
+        sources,
+        heading=heading,
+        key_points=outline_key_points,
+        limit=limit,
+    )
 
 
 def match_outline_key_points(paper_outline: Any, heading: str) -> str:
@@ -250,7 +266,11 @@ def polish_section_markdown(
         parts.append(seed_hint.strip())
     parts.extend(
         [
-            format_sources_for_polish(sources),
+            format_sources_for_polish(
+                sources,
+                heading=resolved_heading,
+                outline_key_points=outline_key_points,
+            ),
             f"Current section (preserve <<LOCKED_n>> tokens):\n{heading_line}\n\n{extracted.editable}",
         ]
     )

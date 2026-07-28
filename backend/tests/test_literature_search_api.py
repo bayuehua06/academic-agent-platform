@@ -260,7 +260,7 @@ async def test_confirm_selected_candidates(auth_client):
 
     mock_svc = _mock_zotero_service()
     with (
-        patch("app.services.literature_workflow.zotero_service", mock_svc),
+        patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc),
         patch("app.api.zotero.zotero_service", mock_svc),
     ):
         conf = await auth_client.post(
@@ -307,7 +307,7 @@ async def test_literature_search_marks_already_exists(auth_client):
             "app.api.literature_search.ieee_aut_search_service.search",
             new=AsyncMock(return_value=fake),
         ),
-        patch("app.api.literature_search.zotero_service", mock_svc),
+        patch("app.api.literature_search.zotero_for_project", return_value=mock_svc),
     ):
         res = await auth_client.post(
             f"/api/projects/{pid}/literature-search",

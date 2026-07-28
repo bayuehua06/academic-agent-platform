@@ -5,6 +5,31 @@ from unittest.mock import patch
 from tests.helpers import prepare_confirmed_literatures, prepare_writing_inputs
 
 
+async def test_agent_progress_idle_and_set(auth_client):
+    from app.services.agent_progress import clear_agent_progress, set_agent_progress
+
+    create = await auth_client.post("/api/projects", json={"title": "Progress"})
+    pid = create.json()["id"]
+
+    idle = await auth_client.get(f"/api/projects/{pid}/agent-progress")
+    assert idle.status_code == 200
+    assert idle.json()["running"] is False
+    assert idle.json()["stage"] == "idle"
+
+    set_agent_progress(pid, "evidence", detail="building cards", percent=40)
+    try:
+        got = await auth_client.get(f"/api/projects/{pid}/agent-progress")
+        assert got.status_code == 200
+        body = got.json()
+        assert body["running"] is True
+        assert body["stage"] == "evidence"
+        assert "证据" in body["label"]
+        assert body["percent"] == 40
+        assert "building" in body["detail"]
+    finally:
+        clear_agent_progress(pid)
+
+
 async def test_list_projects_empty(auth_client):
     res = await auth_client.get("/api/projects")
     assert res.status_code == 200
@@ -135,10 +160,10 @@ async def test_run_agent_creates_draft_and_literatures(auth_client, monkeypatch)
     await prepare_writing_inputs(auth_client, pid)
     _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=3)
 
-    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+    with patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",
-            json={"max_papers": 3, "skip_search": True},
+            json={"max_papers": 3, "skip_search": True, "auto_repair": False},
         )
     assert run.status_code == 200
     draft = run.json()
@@ -147,6 +172,11 @@ async def test_run_agent_creates_draft_and_literatures(auth_client, monkeypatch)
     assert draft["content_markdown"]
     assert draft["apa_references_block"]
     assert "writer=template" in (draft.get("changelog") or "")
+    assert "verify_ok" in draft
+    # 默认不自动 repair：校验失败时应可询问
+    if draft.get("verify_ok") is False:
+        assert draft.get("repair_available") is True
+        assert "repair_skipped=True" in (draft.get("changelog") or "")
 
     project = (await auth_client.get(f"/api/projects/{pid}")).json()
     assert project["status"] == "HAS_DRAFT"
@@ -162,3 +192,43 @@ async def test_run_agent_creates_draft_and_literatures(auth_client, monkeypatch)
     assert len(lits) == 3
     assert all(item["title"] for item in lits)
     assert all(item.get("confirmed_at") for item in lits)
+
+
+async def test_repair_agent_draft_creates_new_version(auth_client, monkeypatch):
+    from app.services import summarizer as summarizer_module
+    from app.services.writing_constraints import WritingConstraints
+
+    monkeypatch.setattr(summarizer_module, "has_openai_key", lambda: False)
+    create = await auth_client.post("/api/projects", json={"title": "Repair Flow"})
+    pid = create.json()["id"]
+    await prepare_writing_inputs(auth_client, pid)
+    run = await auth_client.post(
+        f"/api/projects/{pid}/run-agent",
+        json={"max_papers": 3, "skip_search": True, "auto_repair": False},
+    )
+    assert run.status_code == 200
+    base = run.json()
+
+    def fake_repair(md, **kwargs):  # noqa: ANN001
+        fixed = (md or "") + "\n\nCritical reflection added for repair test.\n"
+        v = {
+            "ok": True,
+            "issues": [],
+            "word_count": 120,
+            "word_target": {"min": 100, "max": 200},
+            "repaired": True,
+        }
+        return fixed, WritingConstraints(), v
+
+    with patch("app.api.projects.repair_draft_markdown", side_effect=fake_repair):
+        repaired = await auth_client.post(
+            f"/api/projects/{pid}/repair-agent-draft",
+            json={"version_id": base["id"]},
+        )
+    assert repaired.status_code == 200, repaired.text
+    body = repaired.json()
+    assert body["source_type"] == "AGENT_REPAIR"
+    assert body["repaired"] is True
+    assert body["version_number"] == base["version_number"] + 1
+    assert "Critical reflection" in body["content_markdown"]
+    assert body.get("repair_available") is False

@@ -49,6 +49,25 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     # Writer 长文专用；空则回退 openai_model
     openai_writer_model: str = "gpt-4o"
+    writer_evidence_keyword_top_n: int = 20
+    writer_evidence_top_k: int = 3
+    writer_evidence_best_score_min: int = 2
+    writer_evidence_max_chunks_per_source: int = 3
+    writer_evidence_max_chars_per_section: int = 12000
+    writer_evidence_fallback_mode: str = "both"
+    writer_evidence_enrich_max_sources: int = 8
+    writer_evidence_http_timeout_seconds: float = 4.0
+    writer_evidence_user_agent: str = "AcademicAgentPlatform/1.4 evidence-fetch"
+    # CE4: PDF 全文（Zotero 附件 / Unpaywall OA）
+    writer_evidence_enable_zotero_pdf: bool = True
+    writer_evidence_enable_unpaywall: bool = True
+    writer_evidence_pdf_max_sources: int = 6
+    writer_evidence_pdf_max_pages: int = 20
+    writer_evidence_pdf_max_chars: int = 16000
+    # Unpaywall 要求有效邮箱；空则跳过 OA PDF
+    writer_evidence_unpaywall_email: str = ""
+    # True 时忽略 literatures.evidence_text 缓存，强制重抓
+    writer_evidence_force_refresh: bool = False
 
     chrome_user_data_dir: str = ""
     chrome_profile_directory: str = "Default"

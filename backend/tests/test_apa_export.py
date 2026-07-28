@@ -83,7 +83,7 @@ async def test_export_filename_content_disposition(auth_client, monkeypatch):
     pid = create.json()["id"]
     await prepare_writing_inputs(auth_client, pid)
     _lits, mock_svc = await prepare_confirmed_literatures(auth_client, pid, count=1)
-    with patch("app.services.literature_workflow.zotero_service", mock_svc):
+    with patch("app.services.literature_workflow.zotero_for_project", return_value=mock_svc):
         run = await auth_client.post(
             f"/api/projects/{pid}/run-agent",
             json={"max_papers": 1, "skip_search": True},

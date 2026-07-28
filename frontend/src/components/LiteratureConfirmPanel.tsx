@@ -11,6 +11,8 @@ import {
   Project,
 } from "@/lib/api";
 import { ZoteroList } from "@/components/ZoteroList";
+import { ZoteroBindingPanel } from "@/components/ZoteroBindingPanel";
+import { LiteratureAssignPanel } from "@/components/LiteratureAssignPanel";
 
 type Chapter = {
   heading: string;
@@ -140,8 +142,16 @@ export function LiteratureConfirmPanel({
     () => project.literature_databases?.length ? [...project.literature_databases] : ["ieee"],
   );
   const [savingDbs, setSavingDbs] = useState(false);
+  const [attachTargets, setAttachTargets] = useState<{ key: string; name: string }[]>(
+    [],
+  );
+  const [targetCollectionKey, setTargetCollectionKey] = useState("");
 
   const outlineReady = Boolean(project.outline_ready && chapters.length);
+  const zoteroBound = Boolean(
+    project.zotero_collection_id && project.zotero_binding_mode,
+  );
+  const isAttach = project.zotero_binding_mode === "attach";
   const current = chapters[step] || null;
   const heading = current?.heading || "";
 
@@ -151,6 +161,54 @@ export function LiteratureConfirmPanel({
       : ["ieee"];
     setSelectedDbs(fromProject);
   }, [project.literature_databases]);
+
+  useEffect(() => {
+    if (!isAttach || !project.zotero_collection_id) {
+      setAttachTargets([]);
+      setTargetCollectionKey("");
+      return;
+    }
+    const rootKey = project.zotero_collection_id;
+    const storageKey = `lit-attach-target:${projectId}`;
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams();
+        if (project.zotero_library_type) qs.set("library_type", project.zotero_library_type);
+        if (project.zotero_library_id) qs.set("library_id", project.zotero_library_id);
+        const res = await apiFetch<{
+          children: { key: string; name: string }[];
+        }>(`/zotero/collections/${encodeURIComponent(rootKey)}/children?${qs}`);
+        if (cancelled) return;
+        const children = res.children || [];
+        setAttachTargets(children);
+        const remembered =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(storageKey) || ""
+            : "";
+        const allowed = new Set([rootKey, ...children.map((c) => c.key)]);
+        if (remembered && allowed.has(remembered)) {
+          setTargetCollectionKey(remembered);
+        } else {
+          setTargetCollectionKey(rootKey);
+        }
+      } catch {
+        if (!cancelled) {
+          setAttachTargets([]);
+          setTargetCollectionKey(rootKey);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isAttach,
+    project.zotero_collection_id,
+    project.zotero_library_type,
+    project.zotero_library_id,
+    projectId,
+  ]);
 
   useEffect(() => {
     apiFetch<{ providers: LiteratureProvider[]; openai_configured?: boolean }>(
@@ -347,6 +405,10 @@ export function LiteratureConfirmPanel({
   }
 
   async function runSearch() {
+    if (!zoteroBound) {
+      onError("请先完成 Zotero 绑定");
+      return;
+    }
     if (!outlineReady || !heading) {
       onError("请先在 Inputs 锁定论文大纲（C）");
       return;
@@ -408,16 +470,33 @@ export function LiteratureConfirmPanel({
       onError("请至少勾选一篇");
       return;
     }
+    if (isAttach && !targetCollectionKey) {
+      onError("请选择入库目标 Collection（根或子集合）");
+      return;
+    }
     setConfirming(true);
     setBusy(true);
     onError("");
     onMessage(`正在写入 Zotero（${indices.length} 篇）…`);
     try {
+      const body: Record<string, unknown> = { indices };
+      if (isAttach) {
+        body.target_collection_key = targetCollectionKey;
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(
+            `lit-attach-target:${projectId}`,
+            targetCollectionKey,
+          );
+        }
+      }
       const created = await apiFetch<Literature[]>(
         `/projects/${projectId}/literature-search/${run.id}/confirm`,
-        { method: "POST", body: JSON.stringify({ indices }) },
+        { method: "POST", body: JSON.stringify(body) },
       );
-      onMessage(`已入库 ${created.length} 篇到章节「${run.outline_heading}」`);
+      const targetHint = isAttach
+        ? `目标 ${targetCollectionKey === project.zotero_collection_id ? "根集合" : targetCollectionKey}`
+        : `章节「${run.outline_heading}」`;
+      onMessage(`已入库 ${created.length} 篇到${targetHint}`);
       setSelected(new Set());
       setRun(null);
       // 入库后取消该章「跳过」标记
@@ -445,8 +524,39 @@ export function LiteratureConfirmPanel({
     }
   }
 
+  if (project.zotero_binding_mode === "attach") {
+    return (
+      <LiteratureAssignPanel
+        projectId={projectId}
+        project={project}
+        literatures={literatures}
+        busy={busy}
+        setBusy={setBusy}
+        onMessage={onMessage}
+        onError={onError}
+        onReload={onReload}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
+      <ZoteroBindingPanel
+        projectId={projectId}
+        project={project}
+        busy={busy}
+        setBusy={setBusy}
+        onMessage={onMessage}
+        onError={onError}
+        onReload={onReload}
+      />
+
+      {!zoteroBound && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          请先完成上方 Zotero 绑定后，再进行按章检索与入库。
+        </p>
+      )}
+
       <section className="card space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -672,7 +782,7 @@ export function LiteratureConfirmPanel({
             <button
               type="button"
               className="btn-outline"
-              disabled={busy}
+              disabled={busy || !zoteroBound}
               onClick={syncFromZotero}
             >
               从 Zotero 同步
@@ -680,7 +790,7 @@ export function LiteratureConfirmPanel({
             <button
               type="button"
               className="btn"
-              disabled={busy || searching}
+              disabled={busy || searching || !zoteroBound}
               onClick={runSearch}
             >
               {searching ? "检索中…" : "检索本章"}
@@ -728,13 +838,45 @@ export function LiteratureConfirmPanel({
               <button
                 type="button"
                 className="btn text-xs"
-                disabled={busy || confirming || selected.size === 0}
+                disabled={
+                  busy ||
+                  confirming ||
+                  selected.size === 0 ||
+                  (isAttach && !targetCollectionKey)
+                }
                 onClick={confirmImport}
               >
                 {confirming ? "入库中…" : `确认入库（${selected.size}）`}
               </button>
             </div>
           </div>
+
+          {isAttach && (
+            <div>
+              <label className="label" htmlFor="attach-target">
+                入库目标（与章节解耦）
+              </label>
+              <select
+                id="attach-target"
+                className="input"
+                disabled={busy || confirming}
+                value={targetCollectionKey}
+                onChange={(e) => setTargetCollectionKey(e.target.value)}
+              >
+                <option value={project.zotero_collection_id || ""}>
+                  根集合（{project.zotero_collection_id}）
+                </option>
+                {attachTargets.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.name || c.key}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-stone-400">
+                章只影响检索词；写入哪个子集合（或根）由这里决定。
+              </p>
+            </div>
+          )}
 
           {!run.candidates.length ? (
             <p className="text-sm text-stone-500">无候选结果</p>
